@@ -765,7 +765,10 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         duplex: hasBody ? "half" : undefined,
       });
 
-      // Build request context for has/missing condition matching
+      // Build request context for has/missing condition matching.
+      // headers and redirects run before middleware and use this pre-middleware
+      // snapshot. beforeFiles, afterFiles, and fallback all run after middleware
+      // per the Next.js execution order, so they use postMwReqCtx below.
       const reqCtx: RequestContext = requestContextFromRequest(webRequest);
 
       // ── 4. Run middleware ─────────────────────────────────────────
@@ -846,6 +849,11 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         }
       }
 
+      // Rebuild context after middleware has unpacked x-middleware-request-*
+      // headers into webRequest. Used only for afterFiles and fallback rewrites,
+      // which run after middleware in the App Router execution order.
+      const postMwReqCtx: RequestContext = requestContextFromRequest(webRequest);
+
       let resolvedPathname = resolvedUrl.split("?")[0];
 
       // ── 5. Apply custom headers from next.config.js ───────────────
@@ -893,7 +901,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
 
       // ── 7. Apply beforeFiles rewrites from next.config.js ─────────
       if (configRewrites.beforeFiles?.length) {
-        const rewritten = matchRewrite(resolvedPathname, configRewrites.beforeFiles, reqCtx);
+        const rewritten = matchRewrite(resolvedPathname, configRewrites.beforeFiles, postMwReqCtx);
         if (rewritten) {
           if (isExternalUrl(rewritten)) {
             const proxyResponse = await proxyExternalRequest(webRequest, rewritten);
@@ -929,7 +937,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
 
       // ── 9. Apply afterFiles rewrites from next.config.js ──────────
       if (configRewrites.afterFiles?.length) {
-        const rewritten = matchRewrite(resolvedPathname, configRewrites.afterFiles, reqCtx);
+        const rewritten = matchRewrite(resolvedPathname, configRewrites.afterFiles, postMwReqCtx);
         if (rewritten) {
           if (isExternalUrl(rewritten)) {
             const proxyResponse = await proxyExternalRequest(webRequest, rewritten);
@@ -948,7 +956,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
 
         // ── 11. Fallback rewrites (if SSR returned 404) ─────────────
         if (response && response.status === 404 && configRewrites.fallback?.length) {
-          const fallbackRewrite = matchRewrite(resolvedPathname, configRewrites.fallback, reqCtx);
+          const fallbackRewrite = matchRewrite(resolvedPathname, configRewrites.fallback, postMwReqCtx);
           if (fallbackRewrite) {
             if (isExternalUrl(fallbackRewrite)) {
               const proxyResponse = await proxyExternalRequest(webRequest, fallbackRewrite);

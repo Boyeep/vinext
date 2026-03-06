@@ -46,6 +46,27 @@ export function middleware(request: NextRequest) {
     return NextResponse.next({ request: { headers } });
   }
 
+  // Inject mw-user=1 cookie for afterFiles rewrite gating test.
+  // afterFiles rewrites run after middleware, so they should see this cookie.
+  // The /mw-gated-rewrite rule in next.config.mjs has: [cookie:mw-user],
+  // which should match when ?mw-auth is present and middleware injects it.
+  if (url.pathname === "/mw-gated-rewrite" && url.searchParams.has("mw-auth")) {
+    const headers = new Headers(request.headers);
+    const existing = headers.get("cookie") ?? "";
+    headers.set("cookie", existing ? existing + "; mw-user=1" : "mw-user=1");
+    return NextResponse.next({ request: { headers } });
+  }
+
+  // Inject mw-before-user=1 cookie for beforeFiles rewrite gating test.
+  // beforeFiles rewrites run after middleware per Next.js docs, so they
+  // should see this cookie. The /mw-gated-before rule has: [cookie:mw-before-user].
+  if (url.pathname === "/mw-gated-before" && url.searchParams.has("mw-auth")) {
+    const headers = new Headers(request.headers);
+    const existing = headers.get("cookie") ?? "";
+    headers.set("cookie", existing ? existing + "; mw-before-user=1" : "mw-before-user=1");
+    return NextResponse.next({ request: { headers } });
+  }
+
   return response;
 }
 
