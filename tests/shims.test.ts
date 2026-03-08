@@ -5332,8 +5332,8 @@ describe("extractMdxOptions", () => {
     const { extractMdxOptions } = await import(
       "../packages/vinext/src/config/next-config.js"
     );
-    expect(extractMdxOptions({})).toBeNull();
-    expect(extractMdxOptions({ webpack: "not a function" })).toBeNull();
+    await expect(extractMdxOptions({})).resolves.toBeNull();
+    await expect(extractMdxOptions({ webpack: "not a function" })).resolves.toBeNull();
   });
 
   it("extracts remarkPlugins from webpack rule", async () => {
@@ -5358,7 +5358,7 @@ describe("extractMdxOptions", () => {
         return webpackConfig;
       },
     };
-    const result = extractMdxOptions(config);
+    const result = await extractMdxOptions(config);
     expect(result).not.toBeNull();
     expect(result!.remarkPlugins).toHaveLength(1);
     expect(result!.remarkPlugins![0]).toEqual([fakeRemarkPlugin, { option: true }]);
@@ -5387,7 +5387,7 @@ describe("extractMdxOptions", () => {
         return webpackConfig;
       },
     };
-    const result = extractMdxOptions(config);
+    const result = await extractMdxOptions(config);
     expect(result).not.toBeNull();
     expect(result!.rehypePlugins).toHaveLength(1);
     expect(result!.remarkPlugins).toBeUndefined();
@@ -5414,7 +5414,7 @@ describe("extractMdxOptions", () => {
         return webpackConfig;
       },
     };
-    const result = extractMdxOptions(config);
+    const result = await extractMdxOptions(config);
     expect(result).not.toBeNull();
     expect(result!.recmaPlugins).toHaveLength(1);
   });
@@ -5444,7 +5444,7 @@ describe("extractMdxOptions", () => {
         return webpackConfig;
       },
     };
-    const result = extractMdxOptions(config);
+    const result = await extractMdxOptions(config);
     expect(result).not.toBeNull();
     expect(result!.remarkPlugins).toHaveLength(1);
   });
@@ -5458,7 +5458,7 @@ describe("extractMdxOptions", () => {
         throw new Error("some webpack error");
       },
     };
-    expect(extractMdxOptions(config)).toBeNull();
+    await expect(extractMdxOptions(config)).resolves.toBeNull();
   });
 
   it("returns null when webpack has no MDX loader", async () => {
@@ -5474,7 +5474,7 @@ describe("extractMdxOptions", () => {
         return webpackConfig;
       },
     };
-    expect(extractMdxOptions(config)).toBeNull();
+    await expect(extractMdxOptions(config)).resolves.toBeNull();
   });
 
   it("returns null when MDX loader has empty plugin arrays", async () => {
@@ -5498,7 +5498,7 @@ describe("extractMdxOptions", () => {
         return webpackConfig;
       },
     };
-    expect(extractMdxOptions(config)).toBeNull();
+    await expect(extractMdxOptions(config)).resolves.toBeNull();
   });
 
   it("resolveNextConfig extracts mdx from webpack closure", async () => {

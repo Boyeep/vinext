@@ -1838,7 +1838,7 @@ hydrate();
         // Load next.config.js if present (always from project root, not src/)
         const phase = env?.command === "build" ? PHASE_PRODUCTION_BUILD : PHASE_DEVELOPMENT_SERVER;
         const rawConfig = await loadNextConfig(root, phase);
-        nextConfig = await resolveNextConfig(rawConfig);
+        nextConfig = await resolveNextConfig(rawConfig, root);
         fileMatcher = createValidFileMatcher(nextConfig.pageExtensions);
 
         // Merge env from next.config.js with NEXT_PUBLIC_* env vars
@@ -1895,6 +1895,7 @@ hydrate();
         // Build the shim alias map — used by both resolve.alias and resolveId
         // (resolveId handles .js extension variants for libraries like nuqs)
         nextShimMap = {
+          ...nextConfig.aliases,
           "next/link": path.join(shimsDir, "link"),
           "next/head": path.join(shimsDir, "head"),
           "next/router": path.join(shimsDir, "router"),
