@@ -1423,6 +1423,72 @@ describe("middleware runner", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Dev-mode runMiddleware header preservation tests
+// Tests that the middleware.ts runner (used by the dev server) preserves
+// x-middleware-request-* headers so the caller can unpack them into actual
+// request headers. This is the dev/prod parity fix — the production inline
+// codegen (pages-server-entry.ts) already preserved them correctly.
+
+describe("runMiddleware preserves x-middleware-request-* headers (dev mode)", () => {
+  it("keeps x-middleware-request-* headers on NextResponse.next()", async () => {
+    const { runMiddleware } = await import("../packages/vinext/src/server/middleware.js");
+    const { NextResponse } = await import("../packages/vinext/src/shims/server.js");
+
+    // Mock runner that loads a fake middleware module
+    const mockRunner = {
+      import: async () => ({
+        default: () =>
+          NextResponse.next({
+            request: {
+              headers: new Headers({ "x-custom-injected": "from-middleware" }),
+            },
+          }),
+        config: { matcher: "/" },
+      }),
+    };
+
+    const request = new Request("http://localhost/");
+    const result = await runMiddleware(mockRunner as any, "/fake/middleware.ts", request);
+
+    expect(result.continue).toBe(true);
+    expect(result.responseHeaders).toBeDefined();
+    // x-middleware-request-* must survive so the dev server can unpack them
+    expect(result.responseHeaders!.get("x-middleware-request-x-custom-injected")).toBe(
+      "from-middleware",
+    );
+    // Other x-middleware-* internal headers must be stripped
+    expect(result.responseHeaders!.has("x-middleware-next")).toBe(false);
+  });
+
+  it("keeps x-middleware-request-* headers on rewrite", async () => {
+    const { runMiddleware } = await import("../packages/vinext/src/server/middleware.js");
+    const { NextResponse } = await import("../packages/vinext/src/shims/server.js");
+
+    const mockRunner = {
+      import: async () => ({
+        default: () => {
+          const res = NextResponse.rewrite(new URL("/rewritten", "http://localhost"));
+          // Simulate middleware also setting request headers on a rewrite
+          res.headers.set("x-middleware-request-x-auth", "bearer-token");
+          return res;
+        },
+        config: { matcher: "/" },
+      }),
+    };
+
+    const request = new Request("http://localhost/");
+    const result = await runMiddleware(mockRunner as any, "/fake/middleware.ts", request);
+
+    expect(result.continue).toBe(true);
+    expect(result.rewriteUrl).toBe("/rewritten");
+    expect(result.responseHeaders).toBeDefined();
+    expect(result.responseHeaders!.get("x-middleware-request-x-auth")).toBe("bearer-token");
+    // x-middleware-rewrite must be stripped
+    expect(result.responseHeaders!.has("x-middleware-rewrite")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Middleware/proxy export validation tests
 // Ported from Next.js: test/e2e/app-dir/proxy-missing-export/proxy-missing-export.test.ts
 // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/proxy-missing-export/proxy-missing-export.test.ts
