@@ -2131,7 +2131,7 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
       ],
     });
     expect(code).toContain("__configRedirects");
-    expect(code).toContain("__applyConfigRedirects");
+    expect(code).toContain("matchRedirect");
     expect(code).toContain("/old-about");
     expect(code).toContain("/old-blog/:slug");
     expect(code).toContain("permanent");
@@ -2146,7 +2146,7 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
       },
     });
     expect(code).toContain("__configRewrites");
-    expect(code).toContain("__applyConfigRewrites");
+    expect(code).toContain("matchRewrite");
     expect(code).toContain("beforeFiles");
     expect(code).toContain("afterFiles");
     expect(code).toContain("fallback");
@@ -2162,7 +2162,7 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
       ],
     });
     expect(code).toContain("__configHeaders");
-    expect(code).toContain("__applyConfigHeaders");
+    expect(code).toContain("matchHeaders");
     expect(code).toContain("X-Custom-Header");
     expect(code).toContain("vinext");
   });
@@ -2187,7 +2187,8 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes, null, [], null, "", false, {
       redirects: [{ source: "/docs/:path*", destination: "/wiki/:path*", permanent: false }],
     });
-    expect(code).toContain("__matchConfigPattern");
+    // matchConfigPattern is now used internally by matchRedirect/matchRewrite via config-matchers import
+    expect(code).toContain("matchRedirect");
     // Should handle catch-all patterns
     expect(code).toContain(":path*");
   });
@@ -2205,7 +2206,7 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
       redirects: [{ source: "/old", destination: "/new", permanent: true }],
     });
     // The redirect check should appear before middleware and route matching
-    const redirectIdx = code.indexOf("__redir = __applyConfigRedirects(__redirPathname");
+    const redirectIdx = code.indexOf("matchRedirect(__redirPathname");
     const routeMatchIdx = code.indexOf("matchRoute(cleanPathname");
     expect(redirectIdx).toBeGreaterThan(-1);
     expect(routeMatchIdx).toBeGreaterThan(-1);
@@ -2230,7 +2231,7 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
   it("strips .rsc suffix before matching beforeFiles rewrite rules", () => {
     // RSC (soft-nav) requests arrive as /some/path.rsc but rewrite patterns
     // are defined without the extension. The generated code must strip .rsc
-    // before calling __applyConfigRewrites for beforeFiles.
+    // before calling matchRewrite for beforeFiles.
     // beforeFiles now runs after middleware (using __postMwReqCtx), and
     // cleanPathname has already had .rsc stripped at that point.
     const code = generateRscEntry("/tmp/test/app", minimalRoutes, null, [], null, "", false, {
@@ -2241,8 +2242,8 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
       },
     });
     // The generated code uses cleanPathname (already .rsc-stripped) when
-    // calling __applyConfigRewrites for beforeFiles.
-    const beforeFilesCallIdx = code.indexOf("__applyConfigRewrites(cleanPathname, __configRewrites.beforeFiles");
+    // calling matchRewrite for beforeFiles.
+    const beforeFilesCallIdx = code.indexOf("matchRewrite(cleanPathname, __configRewrites.beforeFiles");
     expect(beforeFilesCallIdx).toBeGreaterThan(-1);
     // The cleanPathname assignment (stripping .rsc) must appear before the beforeFiles call
     const cleanPathnameIdx = code.indexOf("cleanPathname = pathname.replace");
@@ -2291,10 +2292,10 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
       },
     });
     // Should include the external URL detection and proxy functions
-    expect(code).toContain("__isExternalUrl");
-    expect(code).toContain("__proxyExternalRequest");
+    expect(code).toContain("isExternalUrl");
+    expect(code).toContain("proxyExternalRequest");
     // beforeFiles rewrite should check for external URL
-    expect(code).toContain("__isExternalUrl(__rewritten)");
+    expect(code).toContain("isExternalUrl(__rewritten)");
   });
 
   it("generates external URL checks for afterFiles rewrites", () => {
@@ -2305,7 +2306,7 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
         fallback: [],
       },
     });
-    expect(code).toContain("__isExternalUrl(__afterRewritten)");
+    expect(code).toContain("isExternalUrl(__afterRewritten)");
   });
 
   it("generates external URL checks for fallback rewrites", () => {
@@ -2316,10 +2317,10 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
         fallback: [{ source: "/fallback/:path*", destination: "https://fallback.example.com/:path*" }],
       },
     });
-    expect(code).toContain("__isExternalUrl(__fallbackRewritten)");
+    expect(code).toContain("isExternalUrl(__fallbackRewritten)");
   });
 
-  it("guards content-encoding stripping to Node runtime in generated external proxy helper", () => {
+  it("uses imported proxyExternalRequest which guards content-encoding stripping to Node runtime", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes, null, [], null, "", false, {
       rewrites: {
         beforeFiles: [{ source: "/proxy/:path*", destination: "https://api.example.com/:path*" }],
@@ -2327,8 +2328,9 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
         fallback: [],
       },
     });
-    expect(code).toContain("const __isNodeRuntime = typeof process !== \"undefined\" && !!(process.versions && process.versions.node);");
-    expect(code).toContain("if (__isNodeRuntime && (lower === \"content-encoding\" || lower === \"content-length\")) return;");
+    // proxyExternalRequest is now imported from config-matchers (which contains
+    // the isNodeRuntime guard internally), so verify the import is used.
+    expect(code).toContain("proxyExternalRequest(request,");
   });
 
   it("adds basePath prefix to redirect destinations", () => {
@@ -2342,11 +2344,10 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
 
   it("generates CSRF origin validation code for server actions", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes, null, [], null, "", false);
-    // Should include the CSRF validation function
-    expect(code).toContain("__validateCsrfOrigin");
-    expect(code).toContain("__isOriginAllowed");
+    // Should import the CSRF validation function from request-pipeline
+    expect(code).toContain("validateCsrfOrigin");
     // Should call CSRF validation before processing server actions
-    const csrfIdx = code.indexOf("__validateCsrfOrigin(request)");
+    const csrfIdx = code.indexOf("validateCsrfOrigin(request");
     const actionIdx = code.indexOf("loadServerAction(actionId)");
     expect(csrfIdx).toBeGreaterThan(-1);
     expect(actionIdx).toBeGreaterThan(-1);
@@ -2380,15 +2381,12 @@ describe("App Router next.config.js features (generateRscEntry)", () => {
 
   it("origin validation does not use x-forwarded-host", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes, null, [], null, "", false);
-    // The __validateCsrfOrigin function must not read x-forwarded-host.
-    // Extract just the CSRF validation function to ensure no false positives
-    // from other parts of the generated code.
-    const csrfStart = code.indexOf("function __validateCsrfOrigin");
-    const csrfEnd = code.indexOf("\n}", csrfStart) + 2;
-    const csrfFn = code.slice(csrfStart, csrfEnd);
-    expect(csrfFn).not.toContain("x-forwarded-host");
-    // It should use the host header only
-    expect(csrfFn).toContain('request.headers.get("host")');
+    // validateCsrfOrigin is now imported from request-pipeline.ts rather than
+    // inlined. The imported function uses host header only (not x-forwarded-host).
+    // Verify the call site passes allowed origins to the imported function.
+    expect(code).toContain("validateCsrfOrigin(request, __allowedOrigins)");
+    // The generated code should NOT define an inline __validateCsrfOrigin function
+    expect(code).not.toContain("function __validateCsrfOrigin");
   });
 
   // ── Dev origin check code generation ────────────────────────────────
@@ -2958,7 +2956,7 @@ describe("RSC plugin auto-registration", () => {
 });
 
 // ── External rewrite proxy credential stripping (App Router) ─────────────────
-// Regression test: the inline __proxyExternalRequest in the generated RSC entry
+// Regression test: the proxyExternalRequest (imported from config-matchers) in the generated RSC entry
 // must strip Cookie, Authorization, x-api-key, proxy-authorization, and
 // x-middleware-* headers before forwarding to external rewrite destinations.
 describe("App Router external rewrite proxy credential stripping", () => {

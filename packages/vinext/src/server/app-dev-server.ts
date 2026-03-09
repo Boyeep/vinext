@@ -15,6 +15,12 @@ import { generateDevOriginCheckCode } from "./dev-origin-check.js";
 import { generateSafeRegExpCode, generateMiddlewareMatcherCode, generateNormalizePathCode } from "./middleware-codegen.js";
 import { isProxyFile } from "./middleware.js";
 
+// Pre-computed absolute paths for generated-code imports. The virtual RSC
+// entry can't use relative imports (it has no real file location), so we
+// resolve these at code-generation time and embed them as absolute paths.
+const configMatchersPath = fileURLToPath(new URL("../config/config-matchers.js", import.meta.url)).replace(/\\/g, "/");
+const requestPipelinePath = fileURLToPath(new URL("./request-pipeline.js", import.meta.url)).replace(/\\/g, "/");
+
 /**
  * Resolved config options relevant to App Router request handling.
  * Passed from the Vite plugin where the full next.config.js is loaded.
@@ -227,6 +233,8 @@ import { MetadataHead, mergeMetadata, resolveModuleMetadata, ViewportHead, merge
 ${middlewarePath ? `import * as middlewareModule from ${JSON.stringify(middlewarePath.replace(/\\/g, "/"))};` : ""}
 ${instrumentationPath ? `import * as _instrumentation from ${JSON.stringify(instrumentationPath.replace(/\\/g, "/"))};` : ""}
 ${effectiveMetaRoutes.length > 0 ? `import { sitemapToXml, robotsToText, manifestToJson } from ${JSON.stringify(fileURLToPath(new URL("./metadata-routes.js", import.meta.url)).replace(/\\/g, "/"))};` : ""}
+import { requestContextFromRequest, matchRedirect, matchRewrite, matchHeaders, isExternalUrl, proxyExternalRequest, sanitizeDestination } from ${JSON.stringify(configMatchersPath)};
+import { validateCsrfOrigin, validateImageUrl, guardProtocolRelativeUrl, stripBasePath, normalizeTrailingSlash, processMiddlewareHeaders } from ${JSON.stringify(requestPipelinePath)};
 import { _consumeRequestScopedCacheLife, _runWithCacheState } from "next/cache";
 import { runWithFetchCache } from "vinext/fetch-cache";
 import { runWithPrivateCache as _runWithPrivateCache } from "vinext/cache-runtime";
@@ -1069,168 +1077,18 @@ const __allowedOrigins = ${JSON.stringify(allowedOrigins)};
 
 ${generateDevOriginCheckCode(config?.allowedDevOrigins)}
 
-// ── CSRF origin validation for server actions ───────────────────────────
-// Matches Next.js behavior: compare the Origin header against the Host header.
-// If they don't match, the request is rejected with 403 unless the origin is
-// in the allowedOrigins list (from experimental.serverActions.allowedOrigins).
-function __isOriginAllowed(origin, allowed) {
-  for (const pattern of allowed) {
-    if (pattern.startsWith("*.")) {
-      // Wildcard: *.example.com matches sub.example.com, a.b.example.com
-      const suffix = pattern.slice(1); // ".example.com"
-      if (origin === pattern.slice(2) || origin.endsWith(suffix)) return true;
-    } else if (origin === pattern) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function __validateCsrfOrigin(request) {
-  const originHeader = request.headers.get("origin");
-  // If there's no Origin header, allow the request — same-origin requests
-  // from non-fetch navigations (e.g. SSR) may lack an Origin header.
-  // The x-rsc-action custom header already provides protection against simple
-  // form-based CSRF since custom headers can't be set by cross-origin forms.
-  if (!originHeader || originHeader === "null") return null;
-
-  let originHost;
-  try {
-    originHost = new URL(originHeader).host.toLowerCase();
-  } catch {
-    return new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/plain" } });
-  }
-
-  // Only use the Host header for origin comparison — never trust
-  // X-Forwarded-Host here, since it can be freely set by the client
-  // and would allow the check to be bypassed if it matched a spoofed
-  // Origin. The prod server's resolveHost() handles trusted proxy
-  // scenarios separately.
-  const hostHeader = (
-    request.headers.get("host") ||
-    ""
-  ).split(",")[0].trim().toLowerCase();
-
-  if (!hostHeader) return null;
-
-  // Same origin — allow
-  if (originHost === hostHeader) return null;
-
-  // Check allowedOrigins from next.config.js
-  if (__allowedOrigins.length > 0 && __isOriginAllowed(originHost, __allowedOrigins)) return null;
-
-  console.warn(
-    \`[vinext] CSRF origin mismatch: origin "\${originHost}" does not match host "\${hostHeader}". Blocking server action request.\`
-  );
-  return new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/plain" } });
-}
-
-// ── ReDoS-safe regex compilation ────────────────────────────────────────
+// ── ReDoS-safe regex compilation (still needed for middleware matching) ──
 ${generateSafeRegExpCode("modern")}
 
 // ── Path normalization ──────────────────────────────────────────────────
 ${generateNormalizePathCode("modern")}
 
-// ── Config pattern matching (redirects, rewrites, headers) ──────────────
-function __matchConfigPattern(pathname, pattern) {
-  if (pattern.includes("(") || pattern.includes("\\\\") || /:[\\w-]+[*+][^/]/.test(pattern) || /:[\\w-]+\\./.test(pattern)) {
-    try {
-      const paramNames = [];
-      const regexStr = pattern
-        .replace(/\\./g, "\\\\.")
-        .replace(/:([\\w-]+)\\*(?:\\(([^)]+)\\))?/g, (_, name, c) => { paramNames.push(name); return c ? "(" + c + ")" : "(.*)"; })
-        .replace(/:([\\w-]+)\\+(?:\\(([^)]+)\\))?/g, (_, name, c) => { paramNames.push(name); return c ? "(" + c + ")" : "(.+)"; })
-        .replace(/:([\\w-]+)\\(([^)]+)\\)/g, (_, name, c) => { paramNames.push(name); return "(" + c + ")"; })
-        .replace(/:([\\w-]+)/g, (_, name) => { paramNames.push(name); return "([^/]+)"; });
-      const re = __safeRegExp("^" + regexStr + "$");
-      if (!re) return null;
-      const match = re.exec(pathname);
-      if (!match) return null;
-      const params = Object.create(null);
-      for (let i = 0; i < paramNames.length; i++) params[paramNames[i]] = match[i + 1] || "";
-      return params;
-    } catch { /* fall through */ }
-  }
-  const catchAllMatch = pattern.match(/:([\\w-]+)(\\*|\\+)$/);
-  if (catchAllMatch) {
-    const prefix = pattern.slice(0, pattern.lastIndexOf(":"));
-    const paramName = catchAllMatch[1];
-    const isPlus = catchAllMatch[2] === "+";
-    if (!pathname.startsWith(prefix.replace(/\\/$/, ""))) return null;
-    const rest = pathname.slice(prefix.replace(/\\/$/, "").length);
-    if (isPlus && (!rest || rest === "/")) return null;
-    let restValue = rest.startsWith("/") ? rest.slice(1) : rest;
-     // NOTE: Do NOT decodeURIComponent here. The pathname is already decoded at
-     // the request entry point. Decoding again would produce incorrect param values.
-    return { [paramName]: restValue };
-  }
-  const parts = pattern.split("/");
-  const pathParts = pathname.split("/");
-  if (parts.length !== pathParts.length) return null;
-  const params = Object.create(null);
-  for (let i = 0; i < parts.length; i++) {
-    if (parts[i].startsWith(":")) params[parts[i].slice(1)] = pathParts[i];
-    else if (parts[i] !== pathParts[i]) return null;
-  }
-  return params;
-}
-
-function __parseCookies(cookieHeader) {
-  if (!cookieHeader) return {};
-  const cookies = {};
-  for (const part of cookieHeader.split(";")) {
-    const eq = part.indexOf("=");
-    if (eq === -1) continue;
-    const key = part.slice(0, eq).trim();
-    const value = part.slice(eq + 1).trim();
-    if (key) cookies[key] = value;
-  }
-  return cookies;
-}
-
-function __checkSingleCondition(condition, ctx) {
-  switch (condition.type) {
-    case "header": {
-      const v = ctx.headers.get(condition.key);
-      if (v === null) return false;
-      if (condition.value !== undefined) { const re = __safeRegExp(condition.value); return re ? re.test(v) : v === condition.value; }
-      return true;
-    }
-    case "cookie": {
-      const v = ctx.cookies[condition.key];
-      if (v === undefined) return false;
-      if (condition.value !== undefined) { const re = __safeRegExp(condition.value); return re ? re.test(v) : v === condition.value; }
-      return true;
-    }
-    case "query": {
-      const v = ctx.query.get(condition.key);
-      if (v === null) return false;
-      if (condition.value !== undefined) { const re = __safeRegExp(condition.value); return re ? re.test(v) : v === condition.value; }
-      return true;
-    }
-    case "host": {
-      if (condition.value !== undefined) { const re = __safeRegExp(condition.value); return re ? re.test(ctx.host) : ctx.host === condition.value; }
-      return ctx.host === condition.key;
-    }
-    default: return false;
-  }
-}
-
-function __checkHasConditions(has, missing, ctx) {
-  if (has) { for (const c of has) { if (!__checkSingleCondition(c, ctx)) return false; } }
-  if (missing) { for (const c of missing) { if (__checkSingleCondition(c, ctx)) return false; } }
-  return true;
-}
-
-function __buildRequestContext(request) {
-  const url = new URL(request.url);
-  return {
-    headers: request.headers,
-    cookies: __parseCookies(request.headers.get("cookie")),
-    query: url.searchParams,
-    host: request.headers.get("host") || url.host,
-  };
-}
+// ── Config pattern matching, redirects, rewrites, headers, CSRF validation,
+//    external URL proxy, cookie parsing, and request context are imported from
+//    config-matchers.ts and request-pipeline.ts (see import statements above).
+//    This eliminates ~250 lines of duplicated inline code and ensures the
+//    single-pass tokenizer in config-matchers.ts is used consistently
+//    (fixing the chained .replace() divergence flagged by CodeQL).
 
 /**
  * Build a request context from the live ALS HeadersContext, which reflects
@@ -1241,7 +1099,7 @@ function __buildRequestContext(request) {
 function __buildPostMwRequestContext(request) {
   const url = new URL(request.url);
   const ctx = getHeadersContext();
-  if (!ctx) return __buildRequestContext(request);
+  if (!ctx) return requestContextFromRequest(request);
   // ctx.cookies is a Map<string, string> (HeadersContext), but RequestContext
   // requires a plain Record<string, string> for has/missing cookie evaluation
   // (config-matchers.ts uses obj[key] not Map.get()). Convert here.
@@ -1252,44 +1110,6 @@ function __buildPostMwRequestContext(request) {
     query: url.searchParams,
     host: ctx.headers.get("host") || url.host,
   };
-}
-
-function __sanitizeDestination(dest) {
-  if (dest.startsWith("http://") || dest.startsWith("https://")) return dest;
-  dest = dest.replace(/^[\\\\/]+/, "/");
-  return dest;
-}
-
-function __applyConfigRedirects(pathname, ctx) {
-  for (const rule of __configRedirects) {
-    const params = __matchConfigPattern(pathname, rule.source);
-    if (params) {
-      if (ctx && (rule.has || rule.missing)) { if (!__checkHasConditions(rule.has, rule.missing, ctx)) continue; }
-      let dest = rule.destination;
-      for (const [key, value] of Object.entries(params)) { dest = dest.replace(":" + key + "*", value); dest = dest.replace(":" + key + "+", value); dest = dest.replace(":" + key, value); }
-      dest = __sanitizeDestination(dest);
-      return { destination: dest, permanent: rule.permanent };
-    }
-  }
-  return null;
-}
-
-function __applyConfigRewrites(pathname, rules, ctx) {
-  for (const rule of rules) {
-    const params = __matchConfigPattern(pathname, rule.source);
-    if (params) {
-      if (ctx && (rule.has || rule.missing)) { if (!__checkHasConditions(rule.has, rule.missing, ctx)) continue; }
-      let dest = rule.destination;
-      for (const [key, value] of Object.entries(params)) { dest = dest.replace(":" + key + "*", value); dest = dest.replace(":" + key + "+", value); dest = dest.replace(":" + key, value); }
-      dest = __sanitizeDestination(dest);
-      return dest;
-    }
-  }
-  return null;
-}
-
-function __isExternalUrl(url) {
-  return /^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith("//");
 }
 
 /**
@@ -1358,70 +1178,6 @@ async function __readFormDataWithLimit(request, maxBytes) {
   return new Response(combined, { headers: { "Content-Type": contentType } }).formData();
 }
 
-const __hopByHopHeaders = new Set(["connection","keep-alive","proxy-authenticate","proxy-authorization","te","trailers","transfer-encoding","upgrade"]);
-
-async function __proxyExternalRequest(request, externalUrl) {
-  const originalUrl = new URL(request.url);
-  const targetUrl = new URL(externalUrl);
-  for (const [key, value] of originalUrl.searchParams) {
-    if (!targetUrl.searchParams.has(key)) targetUrl.searchParams.set(key, value);
-  }
-  const headers = new Headers(request.headers);
-  headers.set("host", targetUrl.host);
-  headers.delete("connection");
-  for (const key of [...headers.keys()]) {
-    if (key.startsWith("x-middleware-")) headers.delete(key);
-  }
-  const method = request.method;
-  const hasBody = method !== "GET" && method !== "HEAD";
-  const init = { method, headers, redirect: "manual", signal: AbortSignal.timeout(30000) };
-  if (hasBody && request.body) { init.body = request.body; init.duplex = "half"; }
-  let upstream;
-  try { upstream = await fetch(targetUrl.href, init); }
-  catch (e) {
-    if (e && e.name === "TimeoutError") return new Response("Gateway Timeout", { status: 504 });
-    console.error("[vinext] External rewrite proxy error:", e); return new Response("Bad Gateway", { status: 502 });
-  }
-  const respHeaders = new Headers();
-  // Node.js fetch() auto-decompresses response bodies, while Workers fetch()
-  // preserves wire encoding. Only strip encoding/length on Node.js to avoid
-  // double-decompression errors without breaking Workers parity.
-  const __isNodeRuntime = typeof process !== "undefined" && !!(process.versions && process.versions.node);
-  upstream.headers.forEach(function(value, key) {
-    var lower = key.toLowerCase();
-    if (__hopByHopHeaders.has(lower)) return;
-    if (__isNodeRuntime && (lower === "content-encoding" || lower === "content-length")) return;
-    respHeaders.append(key, value);
-  });
-  return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: respHeaders });
-}
-
-function __applyConfigHeaders(pathname, ctx) {
-  const result = [];
-  for (const rule of __configHeaders) {
-    const groups = [];
-    const withPlaceholders = rule.source.replace(/\\(([^)]+)\\)/g, (_, inner) => {
-      groups.push(inner);
-      return "___GROUP_" + (groups.length - 1) + "___";
-    });
-    const escaped = withPlaceholders
-      .replace(/\\./g, "\\\\.")
-      .replace(/\\+/g, "\\\\+")
-      .replace(/\\?/g, "\\\\?")
-      .replace(/\\*/g, ".*")
-      .replace(/:[\\w-]+/g, "[^/]+")
-      .replace(/___GROUP_(\\d+)___/g, (_, idx) => "(" + groups[Number(idx)] + ")");
-    const sourceRegex = __safeRegExp("^" + escaped + "$");
-    if (sourceRegex && sourceRegex.test(pathname)) {
-      if (ctx && (rule.has || rule.missing)) {
-        if (!__checkHasConditions(rule.has, rule.missing, ctx)) continue;
-      }
-      result.push(...rule.headers);
-    }
-  }
-  return result;
-}
-
 export default async function handler(request) {
   // Wrap the entire request in nested AsyncLocalStorage.run() scopes to ensure
   // per-request isolation for all state modules. Each runWith*() creates an
@@ -1434,7 +1190,7 @@ export default async function handler(request) {
       _runWithCacheState(() =>
         _runWithPrivateCache(() =>
           runWithFetchCache(async () => {
-            const __reqCtx = __buildRequestContext(request);
+            const __reqCtx = requestContextFromRequest(request);
             // Per-request container for middleware state. Passed into
             // _handleRequest which fills in .headers and .status;
             // avoids module-level variables that race on Workers.
@@ -1449,7 +1205,7 @@ export default async function handler(request) {
                 let pathname;
                 try { pathname = __normalizePath(decodeURIComponent(url.pathname)); } catch { pathname = url.pathname; }
                 ${bp ? `if (pathname.startsWith(${JSON.stringify(bp)})) pathname = pathname.slice(${JSON.stringify(bp)}.length) || "/";` : ""}
-                const extraHeaders = __applyConfigHeaders(pathname, __reqCtx);
+                const extraHeaders = matchHeaders(pathname, __configHeaders, __reqCtx);
                 for (const h of extraHeaders) {
                   // Use append() for headers where multiple values must coexist
                   // (Vary, Set-Cookie). Using set() on these would destroy
@@ -1491,16 +1247,9 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     if (__originBlock) return __originBlock;
   }
 
-  // Guard against protocol-relative URL open redirects.
-  // Paths like //example.com/ would be redirected to //example.com by the
-  // trailing-slash normalizer, which browsers interpret as http://example.com.
-  // Backslashes are equivalent to forward slashes in the URL spec
-  // (e.g. /\\evil.com is treated as //evil.com by browsers and the URL constructor).
-  // Next.js returns 404 for these paths. Check the RAW pathname before
-  // normalization so the guard fires before normalizePath collapses //.
-  if (url.pathname.replaceAll("\\\\", "/").startsWith("//")) {
-    return new Response("404 Not Found", { status: 404 });
-  }
+  // Guard against protocol-relative URL open redirects (see request-pipeline.ts).
+  const __protoGuard = guardProtocolRelativeUrl(url.pathname);
+  if (__protoGuard) return __protoGuard;
 
   // Decode percent-encoding and normalize pathname to canonical form.
   // decodeURIComponent prevents /%61dmin from bypassing /admin matchers.
@@ -1513,20 +1262,12 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
 
   ${bp ? `
   // Strip basePath prefix
-  if (__basePath && pathname.startsWith(__basePath)) {
-    pathname = pathname.slice(__basePath.length) || "/";
-  }
+  pathname = stripBasePath(pathname, __basePath);
   ` : ""}
 
   // Trailing slash normalization (redirect to canonical form)
-  if (pathname !== "/" && !pathname.startsWith("/api")) {
-    const hasTrailing = pathname.endsWith("/");
-    if (__trailingSlash && !hasTrailing && !pathname.endsWith(".rsc")) {
-      return Response.redirect(new URL(__basePath + pathname + "/" + url.search, request.url), 308);
-    } else if (!__trailingSlash && hasTrailing) {
-      return Response.redirect(new URL(__basePath + pathname.replace(/\\/+$/, "") + url.search, request.url), 308);
-    }
-  }
+  const __tsRedirect = normalizeTrailingSlash(pathname, __basePath, __trailingSlash, url.search);
+  if (__tsRedirect) return __tsRedirect;
 
   // ── Apply redirects from next.config.js ───────────────────────────────
   if (__configRedirects.length) {
@@ -1534,9 +1275,9 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     // arrive as /some/path.rsc but redirect patterns are defined without it (e.g.
     // /some/path). Without this, soft-nav fetches bypass all config redirects.
     const __redirPathname = pathname.endsWith(".rsc") ? pathname.slice(0, -4) : pathname;
-    const __redir = __applyConfigRedirects(__redirPathname, __reqCtx);
+    const __redir = matchRedirect(__redirPathname, __configRedirects, __reqCtx);
     if (__redir) {
-      const __redirDest = __sanitizeDestination(
+      const __redirDest = sanitizeDestination(
         __basePath && !__redir.destination.startsWith(__basePath)
           ? __basePath + __redir.destination
           : __redir.destination
@@ -1635,30 +1376,26 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   // internal routing signals and must never reach clients.
   if (_mwCtx.headers) {
     applyMiddlewareRequestHeaders(_mwCtx.headers);
-    for (const key of [..._mwCtx.headers.keys()]) {
-      if (key.startsWith("x-middleware-")) {
-        _mwCtx.headers.delete(key);
-      }
-    }
+    processMiddlewareHeaders(_mwCtx.headers);
   }
   ` : ""}
 
   // Build post-middleware request context for afterFiles/fallback rewrites.
   // These run after middleware in the App Router execution order and should
   // evaluate has/missing conditions against middleware-modified headers.
-  // When no middleware is present, this falls back to __buildRequestContext.
+  // When no middleware is present, this falls back to requestContextFromRequest.
   const __postMwReqCtx = __buildPostMwRequestContext(request);
 
   // ── Apply beforeFiles rewrites from next.config.js ────────────────────
   // In App Router execution order, beforeFiles runs after middleware so that
   // has/missing conditions can evaluate against middleware-modified headers.
   if (__configRewrites.beforeFiles && __configRewrites.beforeFiles.length) {
-    const __rewritten = __applyConfigRewrites(cleanPathname, __configRewrites.beforeFiles, __postMwReqCtx);
+    const __rewritten = matchRewrite(cleanPathname, __configRewrites.beforeFiles, __postMwReqCtx);
     if (__rewritten) {
-      if (__isExternalUrl(__rewritten)) {
+      if (isExternalUrl(__rewritten)) {
         setHeadersContext(null);
         setNavigationContext(null);
-        return __proxyExternalRequest(request, __rewritten);
+        return proxyExternalRequest(request, __rewritten);
       }
       cleanPathname = __rewritten;
     }
@@ -1666,22 +1403,10 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
 
   // ── Image optimization passthrough (dev mode — no transformation) ───────
   if (cleanPathname === "/_vinext/image") {
-    const __rawImgUrl = url.searchParams.get("url");
-    // Normalize backslashes: browsers and the URL constructor treat
-    // /\\evil.com as protocol-relative (//evil.com), bypassing the // check.
-    const __imgUrl = __rawImgUrl?.replaceAll("\\\\", "/") ?? null;
-    // Allowlist: must start with "/" but not "//" — blocks absolute URLs,
-    // protocol-relative, backslash variants, and exotic schemes.
-    if (!__imgUrl || !__imgUrl.startsWith("/") || __imgUrl.startsWith("//")) {
-      return new Response(!__rawImgUrl ? "Missing url parameter" : "Only relative URLs allowed", { status: 400 });
-    }
-    // Validate the constructed URL's origin hasn't changed (defense in depth).
-    const __resolvedImg = new URL(__imgUrl, request.url);
-    if (__resolvedImg.origin !== url.origin) {
-      return new Response("Only relative URLs allowed", { status: 400 });
-    }
+    const __imgResult = validateImageUrl(url.searchParams.get("url"), request.url);
+    if (__imgResult instanceof Response) return __imgResult;
     // In dev, redirect to the original asset URL so Vite's static serving handles it.
-    return Response.redirect(__resolvedImg.href, 302);
+    return Response.redirect(new URL(__imgResult, url.origin).href, 302);
   }
 
   // Handle metadata routes (sitemap.xml, robots.txt, manifest.webmanifest, etc.)
@@ -1737,7 +1462,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     // ── CSRF protection ─────────────────────────────────────────────────
     // Verify that the Origin header matches the Host header to prevent
     // cross-site request forgery, matching Next.js server action behavior.
-    const csrfResponse = __validateCsrfOrigin(request);
+    const csrfResponse = validateCsrfOrigin(request, __allowedOrigins);
     if (csrfResponse) return csrfResponse;
 
     // ── Body size limit ─────────────────────────────────────────────────
@@ -1896,12 +1621,12 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
 
   // ── Apply afterFiles rewrites from next.config.js ──────────────────────
   if (__configRewrites.afterFiles && __configRewrites.afterFiles.length) {
-    const __afterRewritten = __applyConfigRewrites(cleanPathname, __configRewrites.afterFiles, __postMwReqCtx);
+    const __afterRewritten = matchRewrite(cleanPathname, __configRewrites.afterFiles, __postMwReqCtx);
     if (__afterRewritten) {
-      if (__isExternalUrl(__afterRewritten)) {
+      if (isExternalUrl(__afterRewritten)) {
         setHeadersContext(null);
         setNavigationContext(null);
-        return __proxyExternalRequest(request, __afterRewritten);
+        return proxyExternalRequest(request, __afterRewritten);
       }
       cleanPathname = __afterRewritten;
     }
@@ -1911,12 +1636,12 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
 
   // ── Fallback rewrites from next.config.js (if no route matched) ───────
   if (!match && __configRewrites.fallback && __configRewrites.fallback.length) {
-    const __fallbackRewritten = __applyConfigRewrites(cleanPathname, __configRewrites.fallback, __postMwReqCtx);
+    const __fallbackRewritten = matchRewrite(cleanPathname, __configRewrites.fallback, __postMwReqCtx);
     if (__fallbackRewritten) {
-      if (__isExternalUrl(__fallbackRewritten)) {
+      if (isExternalUrl(__fallbackRewritten)) {
         setHeadersContext(null);
         setNavigationContext(null);
-        return __proxyExternalRequest(request, __fallbackRewritten);
+        return proxyExternalRequest(request, __fallbackRewritten);
       }
       cleanPathname = __fallbackRewritten;
       match = matchRoute(cleanPathname, routes);
@@ -2867,7 +2592,6 @@ export async function handleSsr(rscStream, navContext, fontData) {
         return undefined;
       },
     });
-
 
     // Flush useServerInsertedHTML callbacks (CSS-in-JS style injection)
     const insertedElements = flushServerInsertedHTML();

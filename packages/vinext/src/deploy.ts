@@ -556,7 +556,7 @@ export default {
       }
 
       // ── 2. Trailing slash normalization ────────────────────────────
-      if (pathname !== "/" && !pathname.startsWith("/api")) {
+      if (pathname !== "/" && pathname !== "/api" && !pathname.startsWith("/api/")) {
         const hasTrailing = pathname.endsWith("/");
         if (trailingSlash && !hasTrailing) {
           return new Response(null, {

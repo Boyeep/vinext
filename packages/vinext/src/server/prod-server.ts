@@ -762,7 +762,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
       }
 
       // ── 3. Trailing slash normalization ───────────────────────────
-      if (pathname !== "/" && !pathname.startsWith("/api")) {
+      if (pathname !== "/" && pathname !== "/api" && !pathname.startsWith("/api/")) {
         const hasTrailing = pathname.endsWith("/");
         if (trailingSlash && !hasTrailing) {
           const qs = url.includes("?") ? url.slice(url.indexOf("?")) : "";

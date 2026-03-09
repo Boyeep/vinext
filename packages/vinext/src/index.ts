@@ -28,13 +28,13 @@ import { findInstrumentationFile, runInstrumentation } from "./server/instrument
 import { PHASE_PRODUCTION_BUILD, PHASE_DEVELOPMENT_SERVER } from "./shims/constants.js";
 import { validateDevRequest } from "./server/dev-origin-check.js";
 import {
-  safeRegExp,
   isExternalUrl,
   proxyExternalRequest,
-  parseCookies,
   matchHeaders,
   matchRedirect,
   matchRewrite,
+  requestContextFromRequest,
+  sanitizeDestination,
   type RequestContext,
 } from "./config/config-matchers.js";
 import { scanMetadataFiles } from "./server/metadata-routes.js";
@@ -828,6 +828,7 @@ import { runWithHeadState } from "vinext/head-state";
 import { safeJsonStringify } from "vinext/html";
 import { getSSRFontLinks as _getSSRFontLinks, getSSRFontStyles as _getSSRFontStylesGoogle, getSSRFontPreloads as _getSSRFontPreloadsGoogle } from "next/font/google";
 import { getSSRFontStyles as _getSSRFontStylesLocal, getSSRFontPreloads as _getSSRFontPreloadsLocal } from "next/font/local";
+import { parseCookies } from ${JSON.stringify(path.resolve(__dirname, "config/config-matchers.js").replace(/\\/g, "/"))};
 ${instrumentationImportCode}
 ${middlewareImportCode}
 
@@ -1095,16 +1096,6 @@ function parseCookieLocaleFromHeader(cookieHeader) {
   try { value = decodeURIComponent(match[1].trim()); } catch (e) { return null; }
   if (i18nConfig.locales.indexOf(value) !== -1) return value;
   return null;
-}
-
-function parseCookies(cookieHeader) {
-  const cookies = {};
-  if (!cookieHeader) return cookies;
-  for (const part of cookieHeader.split(";")) {
-    const [key, ...rest] = part.split("=");
-    if (key) cookies[key.trim()] = rest.join("=").trim();
-  }
-  return cookies;
 }
 
 // Lightweight req/res facade for getServerSideProps and API routes.
@@ -2898,7 +2889,7 @@ hydrate();
 
               // Normalize trailing slash based on next.config.js trailingSlash setting.
               // Redirect to the canonical form if needed.
-              if (nextConfig && pathname !== "/" && !pathname.startsWith("/api")) {
+              if (nextConfig && pathname !== "/" && pathname !== "/api" && !pathname.startsWith("/api/")) {
                 const hasTrailing = pathname.endsWith("/");
                 if (nextConfig.trailingSlash && !hasTrailing) {
                   // trailingSlash: true — redirect /about → /about/
@@ -3023,6 +3014,8 @@ hydrate();
 
               // Build request context once for has/missing condition checks
               // across headers, redirects, and rewrites.
+              // Convert Node.js IncomingMessage headers to a Web Request for
+              // requestContextFromRequest(), which uses the standard Web API.
               const reqUrl = new URL(url, `http://${req.headers.host || "localhost"}`);
               const reqCtxHeaders = new Headers(
                 Object.fromEntries(
@@ -3031,12 +3024,9 @@ hydrate();
                     .map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : String(v)])
                 ),
               );
-              const reqCtx: RequestContext = {
-                headers: reqCtxHeaders,
-                cookies: parseCookies(reqCtxHeaders.get("cookie")),
-                query: reqUrl.searchParams,
-                host: reqCtxHeaders.get("host") ?? reqUrl.host,
-              };
+              const reqCtx: RequestContext = requestContextFromRequest(
+                new Request(reqUrl, { headers: reqCtxHeaders }),
+              );
 
               // Apply custom headers from next.config.js
               if (nextConfig?.headers.length) {
@@ -4046,50 +4036,14 @@ function getNextPublicEnvDefines(): Record<string, string> {
   return defines;
 }
 
-/**
- * If the current position in `str` starts with a parenthesized group, consume
- * it and advance `re.lastIndex` past the closing `)`. Returns the group
- * contents or null if no group is present.
- */
-function extractConstraint(str: string, re: RegExp): string | null {
-  if (str[re.lastIndex] !== "(") return null;
-  const start = re.lastIndex + 1;
-  let depth = 1;
-  let i = start;
-  while (i < str.length && depth > 0) {
-    if (str[i] === "(") depth++;
-    else if (str[i] === ")") depth--;
-    i++;
-  }
-  if (depth !== 0) return null;
-  re.lastIndex = i;
-  return str.slice(start, i - 1);
-}
+// matchConfigPattern is imported from config-matchers.ts and re-exported
+// for tests and other consumers that import it from vinext's main entry.
+// The duplicate local implementation and its extractConstraint helper
+// have been removed in favor of the canonical config-matchers.ts version
+// which uses a single-pass tokenizer (fixing the chained .replace()
+// divergence that CodeQL flagged as incomplete sanitization).
+export { matchConfigPattern } from "./config/config-matchers.js";
 
-/**
- * Match a Next.js route pattern (e.g. "/blog/:slug", "/docs/:path*") against a pathname.
- * Returns matched params or null.
- *
- * Supports:
- *   :param     — matches a single path segment
- *   :param*    — matches zero or more segments (catch-all)
- *   :param+    — matches one or more segments
- *   (regex)    — inline regex patterns in the source
- */
-/**
- * Strip server-only data-fetching exports from a page module's source code.
- * Returns the transformed code, or null if no changes were made.
- *
- * Handles:
- * - export (async) function getServerSideProps(...) { ... }
- * - export const getStaticProps = async (...) => { ... }
- * - export const getServerSideProps = someHelper;
- */
-/**
- * Skip past balanced brackets/parens/braces starting at `pos` (which should
- * point to the opening bracket). Returns the position AFTER the closing bracket.
- * Handles nested brackets, string literals, and comments.
- */
 /**
  * Strip server-only data-fetching exports (getServerSideProps,
  * getStaticProps, getStaticPaths) from page modules for the client
@@ -4172,127 +4126,6 @@ function stripServerExports(code: string): string | null {
   return s.toString();
 }
 
-export function matchConfigPattern(
-  pathname: string,
-  pattern: string,
-): Record<string, string> | null {
-  // If the pattern contains regex groups like (\\d+) or (.*), use regex matching.
-  // Also enter this branch when a catch-all parameter (:param* or :param+) is
-  // followed by a literal suffix (e.g. "/:path*.md"). Without this, the suffix
-  // pattern falls through to the simple segment matcher which incorrectly treats
-  // the whole segment (":path*.md") as a named parameter and matches everything.
-  if (
-    pattern.includes("(") ||
-    pattern.includes("\\") ||
-    /:[\w-]+[*+][^/]/.test(pattern) ||
-    /:[\w-]+\./.test(pattern)
-  ) {
-    try {
-      // Extract named params and their constraints from the pattern.
-      // :param(constraint) -> use constraint as the regex group
-      // :param -> ([^/]+)
-      // :param* -> (.*)
-      // :param+ -> (.+)
-      // Param names may contain hyphens (e.g. :auth-method, :sign-in).
-      const paramNames: string[] = [];
-      // Single-pass conversion with procedural suffix handling. The tokenizer
-      // matches only simple, non-overlapping tokens; quantifier/constraint
-      // suffixes after :param are consumed procedurally to avoid polynomial
-      // backtracking in the regex engine.
-      let regexStr = "";
-      const tokenRe = /:([\w-]+)|[.]|[^:.]+/g; // lgtm[js/redos] — alternatives are non-overlapping (`:` and `.` excluded from `[^:.]+`)
-      let tok: RegExpExecArray | null;
-      while ((tok = tokenRe.exec(pattern)) !== null) {
-        if (tok[1] !== undefined) {
-          const name = tok[1];
-          const rest = pattern.slice(tokenRe.lastIndex);
-          // Check for quantifier (* or +) with optional constraint
-          if (rest.startsWith("*") || rest.startsWith("+")) {
-            const quantifier = rest[0];
-            tokenRe.lastIndex += 1;
-            const constraint = extractConstraint(pattern, tokenRe);
-            paramNames.push(name);
-            if (constraint !== null) {
-              regexStr += `(${constraint})`;
-            } else {
-              regexStr += quantifier === "*" ? "(.*)" : "(.+)";
-            }
-          } else {
-            // Check for inline constraint without quantifier
-            const constraint = extractConstraint(pattern, tokenRe);
-            paramNames.push(name);
-            regexStr += constraint !== null ? `(${constraint})` : "([^/]+)";
-          }
-        } else if (tok[0] === ".") {
-          regexStr += "\\.";
-        } else {
-          regexStr += tok[0];
-        }
-      }
-      const re = safeRegExp("^" + regexStr + "$");
-      if (!re) return null;
-      const match = re.exec(pathname);
-      if (!match) return null;
-      const params: Record<string, string> = {};
-      for (let i = 0; i < paramNames.length; i++) {
-        params[paramNames[i]] = match[i + 1] ?? "";
-      }
-      return params;
-    } catch {
-      // Fall through to segment-based matching
-    }
-  }
-
-  // Check for catch-all patterns (:param* or :param+) without regex groups
-  // Param names may contain hyphens (e.g. :sign-in*, :sign-up+).
-  const catchAllMatch = pattern.match(/:([\w-]+)(\*|\+)$/);
-  if (catchAllMatch) {
-    const prefix = pattern.slice(0, pattern.lastIndexOf(":"));
-    const paramName = catchAllMatch[1];
-    const isPlus = catchAllMatch[2] === "+";
-
-    const prefixNoSlash = prefix.replace(/\/$/, "");
-    if (!pathname.startsWith(prefixNoSlash)) return null;
-    const charAfter = pathname[prefixNoSlash.length];
-    if (charAfter !== undefined && charAfter !== "/") return null;
-
-    const rest = pathname.slice(prefixNoSlash.length);
-    // For :path+ we need at least one segment (non-empty after the prefix)
-    if (isPlus && (!rest || rest === "/")) return null;
-    // For :path* zero segments is fine
-    let restValue = rest.startsWith("/") ? rest.slice(1) : rest;
-    // NOTE: Do NOT decodeURIComponent here. The pathname is already decoded at
-    // the entry point. Decoding again would create a double-decode vector.
-    return { [paramName]: restValue };
-  }
-
-  // Simple segment-based matching for exact patterns and :param
-  const parts = pattern.split("/");
-  const pathParts = pathname.split("/");
-
-  if (parts.length !== pathParts.length) return null;
-
-  const params: Record<string, string> = {};
-  for (let i = 0; i < parts.length; i++) {
-    if (parts[i].startsWith(":")) {
-      params[parts[i].slice(1)] = pathParts[i];
-    } else if (parts[i] !== pathParts[i]) {
-      return null;
-    }
-  }
-  return params;
-}
-
-/**
- * Sanitize a redirect/rewrite destination by collapsing leading slashes and
- * backslashes to a single "/" for non-external URLs. Browsers interpret "\"
- * as "/" in URL contexts, so "\/evil.com" becomes "//evil.com" (protocol-relative).
- */
-function sanitizeDestinationLocal(dest: string): string {
-  if (dest.startsWith("http://") || dest.startsWith("https://")) return dest;
-  dest = dest.replace(/^[\\/]+/, "/");
-  return dest;
-}
 
 /**
  * Apply redirect rules from next.config.js.
@@ -4307,7 +4140,7 @@ function applyRedirects(
   const result = matchRedirect(pathname, redirects, ctx);
   if (result) {
     // Sanitize to prevent open redirect via protocol-relative URLs
-    const dest = sanitizeDestinationLocal(result.destination);
+    const dest = sanitizeDestination(result.destination);
     res.writeHead(result.permanent ? 308 : 307, { Location: dest });
     res.end();
     return true;
@@ -4315,9 +4148,7 @@ function applyRedirects(
   return false;
 }
 
-/**
- * Proxy an external rewrite in the Node.js dev server context.
- *
+/*
  * Converts the Node.js IncomingMessage into a Web Request, calls
  * proxyExternalRequest(), and pipes the response back to the Node.js
  * ServerResponse.
@@ -4392,7 +4223,7 @@ function applyRewrites(
   const dest = matchRewrite(pathname, rewrites, ctx);
   if (dest) {
     // Sanitize to prevent open redirect via protocol-relative URLs
-    return sanitizeDestinationLocal(dest);
+    return sanitizeDestination(dest);
   }
   return null;
 }
