@@ -50,6 +50,14 @@ class ApiBodyParseError extends Error {
   }
 }
 
+function getMediaType(contentType: string | undefined): string {
+  const [type] = (contentType ?? "text/plain").split(";");
+  return type?.trim().toLowerCase() || "text/plain";
+}
+
+function isJsonMediaType(mediaType: string): boolean {
+  return mediaType === "application/json" || mediaType === "application/ld+json";
+}
 /**
  * Parse the request body based on content-type.
  * Enforces a size limit to prevent memory exhaustion attacks.
@@ -79,18 +87,24 @@ async function parseBody(req: IncomingMessage): Promise<unknown> {
       if (settled) return;
       settled = true;
       const raw = Buffer.concat(chunks).toString("utf-8");
+      const mediaType = getMediaType(req.headers["content-type"]);
       if (!raw) {
-        resolve(undefined);
+        resolve(
+          isJsonMediaType(mediaType)
+            ? {}
+            : mediaType === "application/x-www-form-urlencoded"
+              ? decodeQueryString(raw)
+              : undefined,
+        );
         return;
       }
-      const contentType = req.headers["content-type"] ?? "";
-      if (contentType.includes("application/json")) {
+      if (isJsonMediaType(mediaType)) {
         try {
           resolve(JSON.parse(raw));
         } catch {
           reject(new ApiBodyParseError("Invalid JSON", 400));
         }
-      } else if (contentType.includes("application/x-www-form-urlencoded")) {
+      } else if (mediaType === "application/x-www-form-urlencoded") {
         resolve(decodeQueryString(raw));
       } else {
         resolve(raw);
@@ -223,6 +237,7 @@ export async function handleApiRoute(
   } catch (e) {
     if (e instanceof ApiBodyParseError) {
       res.statusCode = e.statusCode;
+      res.statusMessage = e.message;
       res.end(e.message);
       return true;
     }

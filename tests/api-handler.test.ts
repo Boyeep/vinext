@@ -189,9 +189,12 @@ describe("handleApiRoute", () => {
       expect(capturedBody).toEqual({ name: "Alice", age: 30 });
     });
 
-    it("returns 400 for malformed JSON", async () => {
+    // Ported from Next.js: test/integration/api-support/test/index.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/integration/api-support/test/index.test.ts
+    it("returns 400 for malformed JSON instead of calling the handler", async () => {
       const handler = vi.fn();
       const server = mockServer({ default: handler });
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const req = mockReq("POST", "/api/users", "{not json", {
         "content-type": "application/json",
       });
@@ -201,9 +204,28 @@ describe("handleApiRoute", () => {
 
       expect(handler).not.toHaveBeenCalled();
       expect(res._statusCode).toBe(400);
+      expect(res.statusMessage).toBe("Invalid JSON");
       expect(res._body).toBe("Invalid JSON");
       expect(server.ssrFixStacktrace).not.toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
       expect(reportRequestError).not.toHaveBeenCalled();
+      errorSpy.mockRestore();
+    });
+
+    it("parses empty application/json bodies as an empty object", async () => {
+      let capturedBody: unknown;
+      const handler = vi.fn((req: any) => {
+        capturedBody = req.body;
+      });
+      const server = mockServer({ default: handler });
+      const req = mockReq("POST", "/api/users", "", {
+        "content-type": "application/json",
+      });
+      const res = mockRes();
+
+      await handleApiRoute(server, req, res, "/api/users", [route("/api/users")]);
+
+      expect(capturedBody).toEqual({});
     });
 
     it("parses application/x-www-form-urlencoded body", async () => {
@@ -222,23 +244,52 @@ describe("handleApiRoute", () => {
       expect(capturedBody).toEqual({ name: "Alice", role: "admin" });
     });
 
-    it("preserves repeated urlencoded keys as arrays", async () => {
+    it("preserves duplicate application/x-www-form-urlencoded keys as arrays", async () => {
       let capturedBody: unknown;
       const handler = vi.fn((req: any) => {
         capturedBody = req.body;
       });
       const server = mockServer({ default: handler });
-      const req = mockReq("POST", "/api/users", "a=1&a=2&b=3", {
+      const req = mockReq("POST", "/api/users", "tag=a&tag=b&tag=c", {
         "content-type": "application/x-www-form-urlencoded",
       });
       const res = mockRes();
 
       await handleApiRoute(server, req, res, "/api/users", [route("/api/users")]);
 
-      expect({ ...(capturedBody as Record<string, unknown>) }).toEqual({
-        a: ["1", "2"],
-        b: "3",
+      expect(capturedBody).toEqual({ tag: ["a", "b", "c"] });
+    });
+
+    it("parses empty application/x-www-form-urlencoded bodies as an empty object", async () => {
+      let capturedBody: unknown;
+      const handler = vi.fn((req: any) => {
+        capturedBody = req.body;
       });
+      const server = mockServer({ default: handler });
+      const req = mockReq("POST", "/api/users", "", {
+        "content-type": "application/x-www-form-urlencoded",
+      });
+      const res = mockRes();
+
+      await handleApiRoute(server, req, res, "/api/users", [route("/api/users")]);
+
+      expect(capturedBody).toEqual({});
+    });
+
+    it("parses application/ld+json bodies as JSON", async () => {
+      let capturedBody: unknown;
+      const handler = vi.fn((req: any) => {
+        capturedBody = req.body;
+      });
+      const server = mockServer({ default: handler });
+      const req = mockReq("POST", "/api/users", JSON.stringify({ title: "doc" }), {
+        "content-type": "application/ld+json; charset=utf-8",
+      });
+      const res = mockRes();
+
+      await handleApiRoute(server, req, res, "/api/users", [route("/api/users")]);
+
+      expect(capturedBody).toEqual({ title: "doc" });
     });
 
     it("returns raw string for unknown content-type", async () => {

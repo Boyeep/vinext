@@ -17810,6 +17810,16 @@ function isrCacheKey(router, pathname) {
   return prefix + ":__hash:" + fnv1a64(normalized);
 }
 
+function getMediaType(contentType) {
+  var type = (contentType || "text/plain").split(";")[0];
+  type = type && type.trim().toLowerCase();
+  return type || "text/plain";
+}
+
+function isJsonMediaType(mediaType) {
+  return mediaType === "application/json" || mediaType === "application/ld+json";
+}
+
 async function renderToStringAsync(element) {
   const stream = await renderToReadableStream(element);
   await stream.allReady;
@@ -17855,8 +17865,9 @@ import * as api_3 from "<ROOT>/tests/fixtures/pages-basic/pages/api/hello.ts";
 import * as api_4 from "<ROOT>/tests/fixtures/pages-basic/pages/api/instrumentation-test.ts";
 import * as api_5 from "<ROOT>/tests/fixtures/pages-basic/pages/api/middleware-test.ts";
 import * as api_6 from "<ROOT>/tests/fixtures/pages-basic/pages/api/no-content-type.ts";
-import * as api_7 from "<ROOT>/tests/fixtures/pages-basic/pages/api/send-buffer.ts";
-import * as api_8 from "<ROOT>/tests/fixtures/pages-basic/pages/api/users/[id].ts";
+import * as api_7 from "<ROOT>/tests/fixtures/pages-basic/pages/api/parse.ts";
+import * as api_8 from "<ROOT>/tests/fixtures/pages-basic/pages/api/send-buffer.ts";
+import * as api_9 from "<ROOT>/tests/fixtures/pages-basic/pages/api/users/[id].ts";
 
 import { default as AppComponent } from "<ROOT>/tests/fixtures/pages-basic/pages/_app.tsx";
 import { default as DocumentComponent } from "<ROOT>/tests/fixtures/pages-basic/pages/_document.tsx";
@@ -17904,8 +17915,9 @@ const apiRoutes = [
   { pattern: "/api/instrumentation-test", patternParts: ["api","instrumentation-test"], isDynamic: false, params: [], module: api_4 },
   { pattern: "/api/middleware-test", patternParts: ["api","middleware-test"], isDynamic: false, params: [], module: api_5 },
   { pattern: "/api/no-content-type", patternParts: ["api","no-content-type"], isDynamic: false, params: [], module: api_6 },
-  { pattern: "/api/send-buffer", patternParts: ["api","send-buffer"], isDynamic: false, params: [], module: api_7 },
-  { pattern: "/api/users/:id", patternParts: ["api","users",":id"], isDynamic: true, params: ["id"], module: api_8 }
+  { pattern: "/api/parse", patternParts: ["api","parse"], isDynamic: false, params: [], module: api_7 },
+  { pattern: "/api/send-buffer", patternParts: ["api","send-buffer"], isDynamic: false, params: [], module: api_8 },
+  { pattern: "/api/users/:id", patternParts: ["api","users",":id"], isDynamic: true, params: ["id"], module: api_9 }
 ];
 
 function matchRoute(url, routes) {
@@ -18612,15 +18624,20 @@ export async function handleApiRoute(request, url) {
   }
   try {
     let body;
-    const ct = request.headers.get("content-type") || "";
+    const mediaType = getMediaType(request.headers.get("content-type"));
     let rawBody;
     try { rawBody = await readBodyWithLimit(request, 1 * 1024 * 1024); }
     catch { return new Response("Request body too large", { status: 413 }); }
     if (!rawBody) {
-      body = undefined;
-    } else if (ct.includes("application/json")) {
-      try { body = JSON.parse(rawBody); } catch { throw new ApiBodyParseError("Invalid JSON", 400); }
-    } else if (ct.includes("application/x-www-form-urlencoded")) {
+      body = isJsonMediaType(mediaType)
+        ? {}
+        : mediaType === "application/x-www-form-urlencoded"
+          ? decodeQueryString(rawBody)
+          : undefined;
+    } else if (isJsonMediaType(mediaType)) {
+      try { body = JSON.parse(rawBody); }
+      catch { throw new ApiBodyParseError("Invalid JSON", 400); }
+    } else if (mediaType === "application/x-www-form-urlencoded") {
       body = decodeQueryString(rawBody);
     } else {
       body = rawBody;
@@ -18634,7 +18651,7 @@ export async function handleApiRoute(request, url) {
     return await responsePromise;
   } catch (e) {
     if (e instanceof ApiBodyParseError) {
-      return new Response(e.message, { status: e.statusCode });
+      return new Response(e.message, { status: e.statusCode, statusText: e.message });
     }
     console.error("[vinext] API error:", e);
     return new Response("Internal Server Error", { status: 500 });

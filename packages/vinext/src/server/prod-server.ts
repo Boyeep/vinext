@@ -167,10 +167,19 @@ function sendCompressed(
   statusCode: number,
   extraHeaders: Record<string, string | string[]> = {},
   compress: boolean = true,
+  statusText: string | undefined = undefined,
 ): void {
   const buf = typeof body === "string" ? Buffer.from(body) : body;
   const baseType = contentType.split(";")[0].trim();
   const encoding = compress ? negotiateEncoding(req) : null;
+
+  const writeHead = (headers: Record<string, string | string[]>) => {
+    if (statusText) {
+      res.writeHead(statusCode, statusText, headers);
+    } else {
+      res.writeHead(statusCode, headers);
+    }
+  };
 
   if (encoding && COMPRESSIBLE_TYPES.has(baseType) && buf.length >= COMPRESS_THRESHOLD) {
     const compressor = createCompressor(encoding);
@@ -188,7 +197,7 @@ function sendCompressed(
     } else {
       varyValue = "Accept-Encoding";
     }
-    res.writeHead(statusCode, {
+    writeHead({
       ...extraHeaders,
       "Content-Type": contentType,
       "Content-Encoding": encoding,
@@ -202,7 +211,7 @@ function sendCompressed(
     // Strip any pre-existing content-length (from the Web Response constructor)
     // before setting our own — avoids duplicate Content-Length headers.
     const { "content-length": _cl, "Content-Length": _CL, ...headersWithoutLength } = extraHeaders;
-    res.writeHead(statusCode, {
+    writeHead({
       ...headersWithoutLength,
       "Content-Type": contentType,
       "Content-Length": String(buf.length),
@@ -397,6 +406,14 @@ async function sendWebResponse(
   compress: boolean,
 ): Promise<void> {
   const status = webResponse.status;
+  const statusText = webResponse.statusText || undefined;
+  const writeHead = (headers: Record<string, string | string[]>) => {
+    if (statusText) {
+      res.writeHead(status, statusText, headers);
+    } else {
+      res.writeHead(status, headers);
+    }
+  };
 
   // Collect headers, handling multi-value headers (e.g. Set-Cookie)
   const nodeHeaders: Record<string, string | string[]> = {};
@@ -410,7 +427,7 @@ async function sendWebResponse(
   });
 
   if (!webResponse.body) {
-    res.writeHead(status, nodeHeaders);
+    writeHead(nodeHeaders);
     res.end();
     return;
   }
@@ -441,7 +458,7 @@ async function sendWebResponse(
     }
   }
 
-  res.writeHead(status, nodeHeaders);
+  writeHead(nodeHeaders);
 
   // HEAD requests: send headers only, skip the body
   if (req.method === "HEAD") {
@@ -936,7 +953,11 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
             });
             const setCookies = result.response.headers.getSetCookie?.() ?? [];
             if (setCookies.length > 0) respHeaders["set-cookie"] = setCookies;
-            res.writeHead(result.response.status, respHeaders);
+            if (result.response.statusText) {
+              res.writeHead(result.response.status, result.response.statusText, respHeaders);
+            } else {
+              res.writeHead(result.response.status, respHeaders);
+            }
             res.end(body);
             return;
           }
@@ -1044,15 +1065,19 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         // the handler doesn't set an explicit Content-Type.
         const ct = response.headers.get("content-type") ?? "application/octet-stream";
         const responseHeaders = mergeResponseHeaders(middlewareHeaders, response);
+        const finalStatus = middlewareRewriteStatus ?? response.status;
+        const finalStatusText =
+          finalStatus === response.status ? response.statusText || undefined : undefined;
 
         sendCompressed(
           req,
           res,
           responseBody,
           ct,
-          middlewareRewriteStatus ?? response.status,
+          finalStatus,
           responseHeaders,
           compress,
+          finalStatusText,
         );
         return;
       }
@@ -1104,15 +1129,19 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
       const responseBody = Buffer.from(await response.arrayBuffer());
       const ct = response.headers.get("content-type") ?? "text/html";
       const responseHeaders = mergeResponseHeaders(middlewareHeaders, response);
+      const finalStatus = middlewareRewriteStatus ?? response.status;
+      const finalStatusText =
+        finalStatus === response.status ? response.statusText || undefined : undefined;
 
       sendCompressed(
         req,
         res,
         responseBody,
         ct,
-        middlewareRewriteStatus ?? response.status,
+        finalStatus,
         responseHeaders,
         compress,
+        finalStatusText,
       );
     } catch (e) {
       console.error("[vinext] Server error:", e);

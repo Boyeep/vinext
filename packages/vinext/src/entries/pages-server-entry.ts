@@ -333,6 +333,16 @@ function isrCacheKey(router, pathname) {
   return prefix + ":__hash:" + fnv1a64(normalized);
 }
 
+function getMediaType(contentType) {
+  var type = (contentType || "text/plain").split(";")[0];
+  type = type && type.trim().toLowerCase();
+  return type || "text/plain";
+}
+
+function isJsonMediaType(mediaType) {
+  return mediaType === "application/json" || mediaType === "application/ld+json";
+}
+
 async function renderToStringAsync(element) {
   const stream = await renderToReadableStream(element);
   await stream.allReady;
@@ -1057,15 +1067,20 @@ export async function handleApiRoute(request, url) {
   }
   try {
     let body;
-    const ct = request.headers.get("content-type") || "";
+    const mediaType = getMediaType(request.headers.get("content-type"));
     let rawBody;
     try { rawBody = await readBodyWithLimit(request, 1 * 1024 * 1024); }
     catch { return new Response("Request body too large", { status: 413 }); }
     if (!rawBody) {
-      body = undefined;
-    } else if (ct.includes("application/json")) {
-      try { body = JSON.parse(rawBody); } catch { throw new ApiBodyParseError("Invalid JSON", 400); }
-    } else if (ct.includes("application/x-www-form-urlencoded")) {
+      body = isJsonMediaType(mediaType)
+        ? {}
+        : mediaType === "application/x-www-form-urlencoded"
+          ? decodeQueryString(rawBody)
+          : undefined;
+    } else if (isJsonMediaType(mediaType)) {
+      try { body = JSON.parse(rawBody); }
+      catch { throw new ApiBodyParseError("Invalid JSON", 400); }
+    } else if (mediaType === "application/x-www-form-urlencoded") {
       body = decodeQueryString(rawBody);
     } else {
       body = rawBody;
@@ -1079,7 +1094,7 @@ export async function handleApiRoute(request, url) {
     return await responsePromise;
   } catch (e) {
     if (e instanceof ApiBodyParseError) {
-      return new Response(e.message, { status: e.statusCode });
+      return new Response(e.message, { status: e.statusCode, statusText: e.message });
     }
     console.error("[vinext] API error:", e);
     return new Response("Internal Server Error", { status: 500 });

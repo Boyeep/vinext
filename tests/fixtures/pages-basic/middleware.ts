@@ -40,7 +40,7 @@ export function middleware(request: NextRequest) {
 
   // Block /blocked with a custom response
   if (url.pathname === "/blocked") {
-    return new Response("Access Denied", { status: 403 });
+    return new Response("Access Denied", { status: 403, statusText: "Blocked by Middleware" });
   }
 
   // Throw an error to test that middleware errors return 500, not bypass auth
