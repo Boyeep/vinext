@@ -2159,7 +2159,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                     for (const [key, value] of result.response.headers) {
                       res.appendHeader(key, value);
                     }
-                    const body = await result.response.text();
+                    const body = Buffer.from(await result.response.arrayBuffer());
                     res.end(body);
                     return;
                   }
