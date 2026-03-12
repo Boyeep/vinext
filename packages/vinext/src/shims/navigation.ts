@@ -11,7 +11,7 @@
 // would throw at link time for missing bindings. With `import * as React`, the
 // bindings are just `undefined` on the namespace object and we can guard at runtime.
 import * as React from "react";
-import { toSameOriginPath } from "./url-utils.js";
+import { toBrowserNavigationHref, toSameOriginAppPath } from "./url-utils.js";
 import { stripBasePath } from "../utils/base-path.js";
 import { ReadonlyURLSearchParams } from "./readonly-url-search-params.js";
 
@@ -154,12 +154,6 @@ const isServer = typeof window === "undefined";
 
 /** basePath from next.config.js, injected by the plugin at build time */
 const __basePath: string = process.env.__NEXT_ROUTER_BASEPATH ?? "";
-
-/** Prepend basePath to a path for browser URLs / fetches */
-function withBasePath(p: string): string {
-  if (!__basePath) return p;
-  return __basePath + p;
-}
 
 // ---------------------------------------------------------------------------
 // RSC prefetch cache utilities (shared between link.tsx and browser entry)
@@ -492,7 +486,7 @@ async function navigateImpl(
   // Normalize same-origin absolute URLs to local paths for SPA navigation
   let normalizedHref = href;
   if (isExternalUrl(href)) {
-    const localPath = toSameOriginPath(href);
+    const localPath = toSameOriginAppPath(href, __basePath);
     if (localPath == null) {
       // Truly external: use full page navigation
       if (mode === "replace") {
@@ -505,7 +499,7 @@ async function navigateImpl(
     normalizedHref = localPath;
   }
 
-  const fullHref = withBasePath(normalizedHref);
+  const fullHref = toBrowserNavigationHref(normalizedHref, window.location.href, __basePath);
 
   // Save scroll position before navigating (for back/forward restoration)
   if (mode === "push") {
@@ -591,7 +585,7 @@ const _appRouter = {
   prefetch(href: string): void {
     if (isServer) return;
     // Prefetch the RSC payload for the target route and store in cache
-    const fullHref = withBasePath(href);
+    const fullHref = toBrowserNavigationHref(href, window.location.href, __basePath);
     const rscUrl = toRscUrl(fullHref);
     const prefetched = getPrefetchedUrls();
     if (prefetched.has(rscUrl)) return;
