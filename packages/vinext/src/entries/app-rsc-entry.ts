@@ -381,6 +381,18 @@ async function __isrSet(key, data, revalidateSeconds, tags) {
 }
 function __pageCacheTags(pathname, extraTags) {
   const tags = [pathname, "_N_T_" + pathname];
+  // Layout hierarchy tags — matches Next.js getDerivedTags.
+  tags.push("_N_T_/layout");
+  const segments = pathname.split("/");
+  let built = "";
+  for (let i = 1; i < segments.length; i++) {
+    if (segments[i]) {
+      built += "/" + segments[i];
+      tags.push("_N_T_" + built + "/layout");
+    }
+  }
+  // Leaf page tag — revalidatePath(path, "page") targets this.
+  tags.push("_N_T_" + built + "/page");
   if (Array.isArray(extraTags)) {
     for (const tag of extraTags) {
       if (!tags.includes(tag)) tags.push(tag);

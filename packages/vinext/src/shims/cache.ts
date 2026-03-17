@@ -365,15 +365,23 @@ export async function revalidateTag(
 /**
  * Revalidate cached data associated with a specific path.
  *
- * Under the hood, Next.js converts paths to internal tags.
- * We use a `_N_T_/path` prefix convention for path-based tags.
+ * Invalidation works through implicit tags generated at render time by
+ * `__pageCacheTags` (in app-rsc-entry.ts), matching Next.js's getDerivedTags:
+ *
+ * - `type: "layout"` → invalidates `_N_T_<path>/layout`, cascading to all
+ *   descendant pages (they carry ancestor layout tags from render time).
+ * - `type: "page"` → invalidates `_N_T_<path>/page`, targeting only the
+ *   exact route's page component.
+ * - No type → invalidates `_N_T_<path>` (broader, exact path).
+ *
+ * The `type` parameter is App Router only — Pages Router does not generate
+ * layout/page hierarchy tags, so only no-type invalidation applies there.
  */
-export async function revalidatePath(path: string, _type?: "page" | "layout"): Promise<void> {
-  // Next.js internally converts paths to tags with the _N_T_ prefix.
-  // Only pass the prefixed form to avoid accidentally invalidating any
-  // cache entry whose tag happens to equal the raw path string.
-  const pathTag = `_N_T_${path}`;
-  await _getActiveHandler().revalidateTag([pathTag]);
+export async function revalidatePath(path: string, type?: "page" | "layout"): Promise<void> {
+  // Strip trailing slash so root "/" becomes "" — avoids double-slash in _N_T_//layout
+  const stem = path.endsWith("/") ? path.slice(0, -1) : path;
+  const tag = type ? `_N_T_${stem}/${type}` : `_N_T_${stem || "/"}`;
+  await _getActiveHandler().revalidateTag(tag);
 }
 
 /**
