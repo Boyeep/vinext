@@ -231,6 +231,14 @@ export function unrelated() {
     expect(extractGetStaticPropsRevalidate(code)).toBeNull();
   });
 
+  it("ignores unrelated revalidate when getStaticProps is re-exported from another file", () => {
+    const code = `const defaults = { revalidate: 30 };
+
+export { getStaticProps } from "./shared";
+`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
+  });
+
   it("handles inline comment after value (fixture file style)", () => {
     // From tests/fixtures/pages-basic/pages/isr-test.tsx:
     //   revalidate: 1, // Revalidate every 1 second

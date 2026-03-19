@@ -136,7 +136,15 @@ function extractGetStaticPropsReturnObjects(code: string): string[] | null {
     /(?:^|\n)\s*(?:export\s+)?(?:async\s+)?function\s+getStaticProps\b|(?:^|\n)\s*(?:export\s+)?(?:const|let|var)\s+getStaticProps\b/.exec(
       code,
     );
-  if (!declarationMatch) return null;
+  if (!declarationMatch) {
+    // A file can re-export getStaticProps from another module without defining
+    // it locally. In that case we can't safely infer revalidate from this file,
+    // so skip the whole-file fallback to avoid unrelated false positives.
+    if (/(?:^|\n)\s*export\s*\{[^}]*\bgetStaticProps\b[^}]*\}\s*from\b/.test(code)) {
+      return [];
+    }
+    return null;
+  }
 
   const declaration = extractGetStaticPropsDeclaration(code, declarationMatch);
   if (declaration === null) return [];
