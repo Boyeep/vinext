@@ -206,6 +206,20 @@ export function unrelated() {
     expect(extractGetStaticPropsRevalidate(code)).toBeNull();
   });
 
+  it("extracts revalidate from a function declaration with destructured params", () => {
+    const code = `export async function getStaticProps({ params }) {
+  return { props: { slug: params?.slug ?? null }, revalidate: 60 };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBe(60);
+  });
+
+  it("extracts revalidate from a function expression with destructured params", () => {
+    const code = `export const getStaticProps = async function({ params }) {
+  return { props: { slug: params?.slug ?? null }, revalidate: 60 };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBe(60);
+  });
+
   it("handles inline comment after value (fixture file style)", () => {
     // From tests/fixtures/pages-basic/pages/isr-test.tsx:
     //   revalidate: 1, // Revalidate every 1 second

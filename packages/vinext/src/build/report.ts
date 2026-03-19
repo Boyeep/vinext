@@ -180,13 +180,7 @@ function extractGetStaticPropsDeclaration(
   const declarationTail = code.slice(declarationStart);
 
   if (declarationText.includes("function getStaticProps")) {
-    const bodyStart = code.indexOf("{", declarationStart + declarationText.length);
-    if (bodyStart === -1) return null;
-
-    const bodyEnd = findMatchingBrace(code, bodyStart);
-    if (bodyEnd === -1) return null;
-
-    return code.slice(bodyStart, bodyEnd + 1);
+    return extractFunctionBody(code, declarationStart + declarationText.length);
   }
 
   const implicitArrowMatch = declarationTail.search(/=>\s*\(\s*\{/);
@@ -200,7 +194,12 @@ function extractGetStaticPropsDeclaration(
     return declarationTail.slice(0, braceEnd + 1);
   }
 
-  const blockBodyMatch = /=>\s*\{|(?:async\s+)?function\b[^{]*\{/.exec(declarationTail);
+  const functionExpressionMatch = /(?:async\s+)?function\b/.exec(declarationTail);
+  if (functionExpressionMatch) {
+    return extractFunctionBody(declarationTail, functionExpressionMatch.index);
+  }
+
+  const blockBodyMatch = /=>\s*\{/.exec(declarationTail);
   if (!blockBodyMatch) return null;
 
   const braceStart = declarationTail.indexOf("{", blockBodyMatch.index);
@@ -212,7 +211,36 @@ function extractGetStaticPropsDeclaration(
   return declarationTail.slice(braceStart, braceEnd + 1);
 }
 
+function extractFunctionBody(code: string, functionStart: number): string | null {
+  const paramsStart = code.indexOf("(", functionStart);
+  if (paramsStart === -1) return null;
+
+  const paramsEnd = findMatchingParen(code, paramsStart);
+  if (paramsEnd === -1) return null;
+
+  const bodyStart = code.indexOf("{", paramsEnd + 1);
+  if (bodyStart === -1) return null;
+
+  const bodyEnd = findMatchingBrace(code, bodyStart);
+  if (bodyEnd === -1) return null;
+
+  return code.slice(bodyStart, bodyEnd + 1);
+}
+
 function findMatchingBrace(code: string, start: number): number {
+  return findMatchingToken(code, start, "{", "}");
+}
+
+function findMatchingParen(code: string, start: number): number {
+  return findMatchingToken(code, start, "(", ")");
+}
+
+function findMatchingToken(
+  code: string,
+  start: number,
+  openToken: string,
+  closeToken: string,
+): number {
   let depth = 0;
   let quote: '"' | "'" | "`" | null = null;
   let inLineComment = false;
@@ -261,12 +289,12 @@ function findMatchingBrace(code: string, start: number): number {
       continue;
     }
 
-    if (char === "{") {
+    if (char === openToken) {
       depth++;
       continue;
     }
 
-    if (char === "}") {
+    if (char === closeToken) {
       depth--;
       if (depth === 0) return i;
     }
