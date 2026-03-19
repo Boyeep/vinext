@@ -110,16 +110,28 @@ export function extractExportConstNumber(code: string, name: string): number | n
  *   null     — no `revalidate` key found (fully static)
  */
 export function extractGetStaticPropsRevalidate(code: string): number | false | null {
-  const searchSpace = extractGetStaticPropsReturnObject(code) ?? code;
   const re = /\brevalidate\s*:\s*(-?\d+(?:\.\d+)?|Infinity|false)\b/;
-  const m = re.exec(searchSpace);
+  const returnObjects = extractGetStaticPropsReturnObjects(code);
+
+  if (returnObjects) {
+    for (const searchSpace of returnObjects) {
+      const m = re.exec(searchSpace);
+      if (!m) continue;
+      if (m[1] === "false") return false;
+      if (m[1] === "Infinity") return Infinity;
+      return parseFloat(m[1]);
+    }
+    return null;
+  }
+
+  const m = re.exec(code);
   if (!m) return null;
   if (m[1] === "false") return false;
   if (m[1] === "Infinity") return Infinity;
   return parseFloat(m[1]);
 }
 
-function extractGetStaticPropsReturnObject(code: string): string | null {
+function extractGetStaticPropsReturnObjects(code: string): string[] | null {
   const declarationMatch =
     /(?:^|\n)\s*(?:export\s+)?(?:async\s+)?function\s+getStaticProps\b|(?:^|\n)\s*(?:export\s+)?(?:const|let|var)\s+getStaticProps\b/.exec(
       code,
@@ -127,19 +139,32 @@ function extractGetStaticPropsReturnObject(code: string): string | null {
   if (!declarationMatch) return null;
 
   const declaration = code.slice(declarationMatch.index);
-  const returnObjectStart =
-    declaration.search(/\breturn\s*\{/) !== -1
-      ? declaration.search(/\breturn\s*\{/)
-      : declaration.search(/=>\s*\(\s*\{/);
-  if (returnObjectStart === -1) return declaration;
+  const returnObjects: string[] = [];
+  const returnPattern = /\breturn\s*\{/g;
+  let returnMatch: RegExpExecArray | null;
 
-  const braceStart = declaration.indexOf("{", returnObjectStart);
-  if (braceStart === -1) return declaration;
+  while ((returnMatch = returnPattern.exec(declaration)) !== null) {
+    const braceStart = declaration.indexOf("{", returnMatch.index);
+    if (braceStart === -1) continue;
+
+    const braceEnd = findMatchingBrace(declaration, braceStart);
+    if (braceEnd === -1) continue;
+
+    returnObjects.push(declaration.slice(braceStart, braceEnd + 1));
+  }
+
+  if (returnObjects.length > 0) return returnObjects;
+
+  const arrowMatch = declaration.search(/=>\s*\(\s*\{/);
+  if (arrowMatch === -1) return [];
+
+  const braceStart = declaration.indexOf("{", arrowMatch);
+  if (braceStart === -1) return [];
 
   const braceEnd = findMatchingBrace(declaration, braceStart);
-  if (braceEnd === -1) return declaration;
+  if (braceEnd === -1) return [];
 
-  return declaration.slice(braceStart, braceEnd + 1);
+  return [declaration.slice(braceStart, braceEnd + 1)];
 }
 
 function findMatchingBrace(code: string, start: number): number {

@@ -185,6 +185,16 @@ export async function getStaticProps() {
     expect(extractGetStaticPropsRevalidate(code)).toBe(60);
   });
 
+  it("finds revalidate in a later return when an earlier return redirects", () => {
+    const code = `export async function getStaticProps(ctx) {
+  if (!ctx.params?.slug) {
+    return { redirect: { destination: "/", permanent: false } };
+  }
+  return { props: { data: 1 }, revalidate: 60 };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBe(60);
+  });
+
   it("handles inline comment after value (fixture file style)", () => {
     // From tests/fixtures/pages-basic/pages/isr-test.tsx:
     //   revalidate: 1, // Revalidate every 1 second
