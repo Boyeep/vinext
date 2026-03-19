@@ -195,6 +195,17 @@ export async function getStaticProps() {
     expect(extractGetStaticPropsRevalidate(code)).toBe(60);
   });
 
+  it("ignores revalidate in a function defined after getStaticProps", () => {
+    const code = `export function getStaticProps() {
+  return { props: {} };
+}
+
+export function unrelated() {
+  return { revalidate: 999 };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
+  });
+
   it("handles inline comment after value (fixture file style)", () => {
     // From tests/fixtures/pages-basic/pages/isr-test.tsx:
     //   revalidate: 1, // Revalidate every 1 second

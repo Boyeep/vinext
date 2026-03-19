@@ -138,7 +138,9 @@ function extractGetStaticPropsReturnObjects(code: string): string[] | null {
     );
   if (!declarationMatch) return null;
 
-  const declaration = code.slice(declarationMatch.index);
+  const declaration = extractGetStaticPropsDeclaration(code, declarationMatch);
+  if (declaration === null) return [];
+
   const returnObjects: string[] = [];
   const returnPattern = /\breturn\s*\{/g;
   let returnMatch: RegExpExecArray | null;
@@ -156,6 +158,8 @@ function extractGetStaticPropsReturnObjects(code: string): string[] | null {
   if (returnObjects.length > 0) return returnObjects;
 
   const arrowMatch = declaration.search(/=>\s*\(\s*\{/);
+  // getStaticProps was found but contains no return objects — return empty
+  // (non-null signals the caller to skip the whole-file fallback).
   if (arrowMatch === -1) return [];
 
   const braceStart = declaration.indexOf("{", arrowMatch);
@@ -165,6 +169,47 @@ function extractGetStaticPropsReturnObjects(code: string): string[] | null {
   if (braceEnd === -1) return [];
 
   return [declaration.slice(braceStart, braceEnd + 1)];
+}
+
+function extractGetStaticPropsDeclaration(
+  code: string,
+  declarationMatch: RegExpExecArray,
+): string | null {
+  const declarationStart = declarationMatch.index;
+  const declarationText = declarationMatch[0];
+  const declarationTail = code.slice(declarationStart);
+
+  if (declarationText.includes("function getStaticProps")) {
+    const bodyStart = code.indexOf("{", declarationStart + declarationText.length);
+    if (bodyStart === -1) return null;
+
+    const bodyEnd = findMatchingBrace(code, bodyStart);
+    if (bodyEnd === -1) return null;
+
+    return code.slice(bodyStart, bodyEnd + 1);
+  }
+
+  const implicitArrowMatch = declarationTail.search(/=>\s*\(\s*\{/);
+  if (implicitArrowMatch !== -1) {
+    const braceStart = declarationTail.indexOf("{", implicitArrowMatch);
+    if (braceStart === -1) return null;
+
+    const braceEnd = findMatchingBrace(declarationTail, braceStart);
+    if (braceEnd === -1) return null;
+
+    return declarationTail.slice(0, braceEnd + 1);
+  }
+
+  const blockBodyMatch = /=>\s*\{|(?:async\s+)?function\b[^{]*\{/.exec(declarationTail);
+  if (!blockBodyMatch) return null;
+
+  const braceStart = declarationTail.indexOf("{", blockBodyMatch.index);
+  if (braceStart === -1) return null;
+
+  const braceEnd = findMatchingBrace(declarationTail, braceStart);
+  if (braceEnd === -1) return null;
+
+  return declarationTail.slice(braceStart, braceEnd + 1);
 }
 
 function findMatchingBrace(code: string, start: number): number {
