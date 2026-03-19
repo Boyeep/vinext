@@ -110,7 +110,6 @@ export function extractExportConstNumber(code: string, name: string): number | n
  *   null     — no `revalidate` key found (fully static)
  */
 export function extractGetStaticPropsRevalidate(code: string): number | false | null {
-  const re = /\brevalidate\s*:\s*(-?\d+(?:\.\d+)?|Infinity|false)\b/;
   const returnObjects = extractGetStaticPropsReturnObjects(code);
 
   if (returnObjects) {
@@ -121,7 +120,7 @@ export function extractGetStaticPropsRevalidate(code: string): number | false | 
     return null;
   }
 
-  const m = re.exec(code);
+  const m = /\brevalidate\s*:\s*(-?\d+(?:\.\d+)?|Infinity|false)\b/.exec(code);
   if (!m) return null;
   if (m[1] === "false") return false;
   if (m[1] === "Infinity") return Infinity;
@@ -399,10 +398,18 @@ function collectReturnObjectsFromFunctionBody(code: string): string[] {
       continue;
     }
 
-    const methodBodyEnd = findObjectMethodBodyEnd(code, i);
-    if (methodBodyEnd !== -1) {
-      i = methodBodyEnd;
-      continue;
+    if (
+      (char >= "A" && char <= "Z") ||
+      (char >= "a" && char <= "z") ||
+      char === "_" ||
+      char === "$" ||
+      char === "*"
+    ) {
+      const methodBodyEnd = findObjectMethodBodyEnd(code, i);
+      if (methodBodyEnd !== -1) {
+        i = methodBodyEnd;
+        continue;
+      }
     }
 
     if (matchesKeywordAt(code, i, "return")) {

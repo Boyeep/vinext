@@ -145,6 +145,8 @@ describe("extractGetStaticPropsRevalidate", () => {
     expect(extractGetStaticPropsRevalidate(code)).toBe(60);
   });
 
+  // These bare return-object cases intentionally exercise the whole-file
+  // fallback path used when no local getStaticProps declaration is present.
   it("extracts revalidate: 0 (treat as SSR)", () => {
     const code = `return { props: {}, revalidate: 0 };`;
     expect(extractGetStaticPropsRevalidate(code)).toBe(0);
