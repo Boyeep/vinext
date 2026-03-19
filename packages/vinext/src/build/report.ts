@@ -141,19 +141,9 @@ function extractGetStaticPropsReturnObjects(code: string): string[] | null {
   const declaration = extractGetStaticPropsDeclaration(code, declarationMatch);
   if (declaration === null) return [];
 
-  const returnObjects: string[] = [];
-  const returnPattern = /\breturn\s*\{/g;
-  let returnMatch: RegExpExecArray | null;
-
-  while ((returnMatch = returnPattern.exec(declaration)) !== null) {
-    const braceStart = declaration.indexOf("{", returnMatch.index);
-    if (braceStart === -1) continue;
-
-    const braceEnd = findMatchingBrace(declaration, braceStart);
-    if (braceEnd === -1) continue;
-
-    returnObjects.push(declaration.slice(braceStart, braceEnd + 1));
-  }
+  const returnObjects = declaration.trimStart().startsWith("{")
+    ? collectReturnObjectsFromFunctionBody(declaration)
+    : [];
 
   if (returnObjects.length > 0) return returnObjects;
 
@@ -225,6 +215,131 @@ function extractFunctionBody(code: string, functionStart: number): string | null
   if (bodyEnd === -1) return null;
 
   return code.slice(bodyStart, bodyEnd + 1);
+}
+
+function collectReturnObjectsFromFunctionBody(code: string): string[] {
+  const returnObjects: string[] = [];
+  let quote: '"' | "'" | "`" | null = null;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  for (let i = 0; i < code.length; i++) {
+    const char = code[i];
+    const next = code[i + 1];
+
+    if (inLineComment) {
+      if (char === "\n") inLineComment = false;
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (char === "*" && next === "/") {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
+
+    if (quote) {
+      if (char === "\\") {
+        i++;
+        continue;
+      }
+      if (char === quote) quote = null;
+      continue;
+    }
+
+    if (char === "/" && next === "/") {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+
+    if (char === "/" && next === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+
+    if (matchesKeywordAt(code, i, "function")) {
+      const nestedBody = extractFunctionBody(code, i);
+      if (nestedBody !== null) {
+        i += nestedBody.length - 1;
+      }
+      continue;
+    }
+
+    if (matchesKeywordAt(code, i, "class")) {
+      const classBody = extractClassBody(code, i);
+      if (classBody !== null) {
+        i += classBody.length - 1;
+      }
+      continue;
+    }
+
+    if (char === "=" && next === ">") {
+      const nestedBody = extractArrowFunctionBody(code, i);
+      if (nestedBody !== null) {
+        i += nestedBody.length - 1;
+      }
+      continue;
+    }
+
+    if (matchesKeywordAt(code, i, "return")) {
+      const braceStart = findNextNonWhitespaceIndex(code, i + "return".length);
+      if (braceStart === -1 || code[braceStart] !== "{") continue;
+
+      const braceEnd = findMatchingBrace(code, braceStart);
+      if (braceEnd === -1) continue;
+
+      returnObjects.push(code.slice(braceStart, braceEnd + 1));
+      i = braceEnd;
+    }
+  }
+
+  return returnObjects;
+}
+
+function extractArrowFunctionBody(code: string, arrowIndex: number): string | null {
+  const bodyStart = findNextNonWhitespaceIndex(code, arrowIndex + 2);
+  if (bodyStart === -1 || code[bodyStart] !== "{") return null;
+
+  const bodyEnd = findMatchingBrace(code, bodyStart);
+  if (bodyEnd === -1) return null;
+
+  return code.slice(bodyStart, bodyEnd + 1);
+}
+
+function extractClassBody(code: string, classStart: number): string | null {
+  const bodyStart = code.indexOf("{", classStart + "class".length);
+  if (bodyStart === -1) return null;
+
+  const bodyEnd = findMatchingBrace(code, bodyStart);
+  if (bodyEnd === -1) return null;
+
+  return code.slice(bodyStart, bodyEnd + 1);
+}
+
+function findNextNonWhitespaceIndex(code: string, start: number): number {
+  for (let i = start; i < code.length; i++) {
+    if (!/\s/.test(code[i])) return i;
+  }
+  return -1;
+}
+
+function matchesKeywordAt(code: string, index: number, keyword: string): boolean {
+  const before = index === 0 ? "" : code[index - 1];
+  const after = code[index + keyword.length] ?? "";
+  return (
+    code.startsWith(keyword, index) &&
+    (before === "" || !/[A-Za-z0-9_$]/.test(before)) &&
+    (after === "" || !/[A-Za-z0-9_$]/.test(after))
+  );
 }
 
 function findMatchingBrace(code: string, start: number): number {
