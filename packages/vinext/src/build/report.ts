@@ -110,17 +110,99 @@ export function extractExportConstNumber(code: string, name: string): number | n
  *   null     — no `revalidate` key found (fully static)
  */
 export function extractGetStaticPropsRevalidate(code: string): number | false | null {
-  // TODO: This regex matches `revalidate:` anywhere in the file, not scoped to
-  // the getStaticProps return object. A config object or comment elsewhere in
-  // the file (e.g. `const defaults = { revalidate: 30 }`) could produce a false
-  // positive. Rare in practice, but a proper AST-based approach would be more
-  // accurate.
+  const searchSpace = extractGetStaticPropsReturnObject(code) ?? code;
   const re = /\brevalidate\s*:\s*(-?\d+(?:\.\d+)?|Infinity|false)\b/;
-  const m = re.exec(code);
+  const m = re.exec(searchSpace);
   if (!m) return null;
   if (m[1] === "false") return false;
   if (m[1] === "Infinity") return Infinity;
   return parseFloat(m[1]);
+}
+
+function extractGetStaticPropsReturnObject(code: string): string | null {
+  const declarationMatch =
+    /(?:^|\n)\s*(?:export\s+)?(?:async\s+)?function\s+getStaticProps\b|(?:^|\n)\s*(?:export\s+)?(?:const|let|var)\s+getStaticProps\b/.exec(
+      code,
+    );
+  if (!declarationMatch) return null;
+
+  const declaration = code.slice(declarationMatch.index);
+  const returnObjectStart =
+    declaration.search(/\breturn\s*\{/) !== -1
+      ? declaration.search(/\breturn\s*\{/)
+      : declaration.search(/=>\s*\(\s*\{/);
+  if (returnObjectStart === -1) return declaration;
+
+  const braceStart = declaration.indexOf("{", returnObjectStart);
+  if (braceStart === -1) return declaration;
+
+  const braceEnd = findMatchingBrace(declaration, braceStart);
+  if (braceEnd === -1) return declaration;
+
+  return declaration.slice(braceStart, braceEnd + 1);
+}
+
+function findMatchingBrace(code: string, start: number): number {
+  let depth = 0;
+  let quote: '"' | "'" | "`" | null = null;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  for (let i = start; i < code.length; i++) {
+    const char = code[i];
+    const next = code[i + 1];
+
+    if (inLineComment) {
+      if (char === "\n") inLineComment = false;
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (char === "*" && next === "/") {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
+
+    if (quote) {
+      if (char === "\\") {
+        i++;
+        continue;
+      }
+      if (char === quote) quote = null;
+      continue;
+    }
+
+    if (char === "/" && next === "/") {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+
+    if (char === "/" && next === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+
+    if (char === "{") {
+      depth++;
+      continue;
+    }
+
+    if (char === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+
+  return -1;
 }
 
 // ─── Route classification ─────────────────────────────────────────────────────

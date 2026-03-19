@@ -167,6 +167,24 @@ describe("extractGetStaticPropsRevalidate", () => {
     expect(extractGetStaticPropsRevalidate(code)).toBeNull();
   });
 
+  it("ignores unrelated revalidate values outside getStaticProps", () => {
+    const code = `const defaults = { revalidate: 30 };
+
+export async function getStaticProps() {
+  return { props: { ok: true } };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
+  });
+
+  it("prefers revalidate inside getStaticProps over unrelated values elsewhere", () => {
+    const code = `const defaults = { revalidate: 30 };
+
+export async function getStaticProps() {
+  return { props: {}, revalidate: 60 };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBe(60);
+  });
+
   it("handles inline comment after value (fixture file style)", () => {
     // From tests/fixtures/pages-basic/pages/isr-test.tsx:
     //   revalidate: 1, // Revalidate every 1 second
