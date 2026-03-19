@@ -231,6 +231,77 @@ export function unrelated() {
     expect(extractGetStaticPropsRevalidate(code)).toBeNull();
   });
 
+  it("ignores revalidate in a nested named function inside getStaticProps", () => {
+    const code = `export function getStaticProps() {
+  function helper(paramOne, paramTwo, paramThree, paramFour, paramFive) {
+    return { revalidate: 999 };
+  }
+
+  return { props: {} };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
+  });
+
+  it("ignores revalidate in a nested implicit-arrow helper inside block-body getStaticProps", () => {
+    const code = `export const getStaticProps = async () => {
+  const helper = () => ({ revalidate: 999 });
+
+  return { props: {} };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
+  });
+
+  it("ignores revalidate in a nested implicit-arrow helper inside function-expression getStaticProps", () => {
+    const code = `export const getStaticProps = async function() {
+  const helper = () => ({ revalidate: 999 });
+
+  return { props: {} };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
+  });
+
+  it("ignores revalidate nested inside props data", () => {
+    const code = `export async function getStaticProps() {
+  return {
+    props: {
+      config: {
+        revalidate: 999,
+      },
+    },
+  };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
+  });
+
+  it("ignores revalidate in an object-method helper inside getStaticProps", () => {
+    const code = `export function getStaticProps() {
+  const helper = {
+    build() {
+      return { revalidate: 999 };
+    },
+  };
+
+  return { props: {} };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
+  });
+
+  it("ignores revalidate in object-method helpers named get and async", () => {
+    const code = `export function getStaticProps() {
+  const helper = {
+    get() {
+      return { revalidate: 999 };
+    },
+    async() {
+      return { revalidate: 998 };
+    },
+  };
+
+  return { props: {} };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
+  });
+
   it("ignores unrelated revalidate when getStaticProps is re-exported from another file", () => {
     const code = `const defaults = { revalidate: 30 };
 

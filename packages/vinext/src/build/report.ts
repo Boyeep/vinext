@@ -115,11 +115,8 @@ export function extractGetStaticPropsRevalidate(code: string): number | false | 
 
   if (returnObjects) {
     for (const searchSpace of returnObjects) {
-      const m = re.exec(searchSpace);
-      if (!m) continue;
-      if (m[1] === "false") return false;
-      if (m[1] === "Infinity") return Infinity;
-      return parseFloat(m[1]);
+      const revalidate = extractTopLevelRevalidateValue(searchSpace);
+      if (revalidate !== null) return revalidate;
     }
     return null;
   }
@@ -129,6 +126,110 @@ export function extractGetStaticPropsRevalidate(code: string): number | false | 
   if (m[1] === "false") return false;
   if (m[1] === "Infinity") return Infinity;
   return parseFloat(m[1]);
+}
+
+function extractTopLevelRevalidateValue(code: string): number | false | null {
+  let braceDepth = 0;
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let quote: '"' | "'" | "`" | null = null;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  for (let i = 0; i < code.length; i++) {
+    const char = code[i];
+    const next = code[i + 1];
+
+    if (inLineComment) {
+      if (char === "\n") inLineComment = false;
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (char === "*" && next === "/") {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
+
+    if (quote) {
+      if (char === "\\") {
+        i++;
+        continue;
+      }
+      if (char === quote) quote = null;
+      continue;
+    }
+
+    if (char === "/" && next === "/") {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+
+    if (char === "/" && next === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+
+    if (char === "{") {
+      braceDepth++;
+      continue;
+    }
+
+    if (char === "}") {
+      braceDepth--;
+      continue;
+    }
+
+    if (char === "(") {
+      parenDepth++;
+      continue;
+    }
+
+    if (char === ")") {
+      parenDepth--;
+      continue;
+    }
+
+    if (char === "[") {
+      bracketDepth++;
+      continue;
+    }
+
+    if (char === "]") {
+      bracketDepth--;
+      continue;
+    }
+
+    if (
+      braceDepth === 1 &&
+      parenDepth === 0 &&
+      bracketDepth === 0 &&
+      matchesKeywordAt(code, i, "revalidate")
+    ) {
+      const colonIndex = findNextNonWhitespaceIndex(code, i + "revalidate".length);
+      if (colonIndex === -1 || code[colonIndex] !== ":") continue;
+
+      const valueStart = findNextNonWhitespaceIndex(code, colonIndex + 1);
+      if (valueStart === -1) return null;
+
+      const valueMatch = /^(-?\d+(?:\.\d+)?|Infinity|false)\b/.exec(code.slice(valueStart));
+      if (!valueMatch) return null;
+      if (valueMatch[1] === "false") return false;
+      if (valueMatch[1] === "Infinity") return Infinity;
+      return parseFloat(valueMatch[1]);
+    }
+  }
+
+  return null;
 }
 
 function extractGetStaticPropsReturnObjects(code: string): string[] | null {
@@ -181,35 +282,38 @@ function extractGetStaticPropsDeclaration(
     return extractFunctionBody(code, declarationStart + declarationText.length);
   }
 
-  const implicitArrowMatch = declarationTail.search(/=>\s*\(\s*\{/);
-  if (implicitArrowMatch !== -1) {
-    const braceStart = declarationTail.indexOf("{", implicitArrowMatch);
-    if (braceStart === -1) return null;
-
-    const braceEnd = findMatchingBrace(declarationTail, braceStart);
-    if (braceEnd === -1) return null;
-
-    return declarationTail.slice(0, braceEnd + 1);
-  }
-
   const functionExpressionMatch = /(?:async\s+)?function\b/.exec(declarationTail);
   if (functionExpressionMatch) {
     return extractFunctionBody(declarationTail, functionExpressionMatch.index);
   }
 
   const blockBodyMatch = /=>\s*\{/.exec(declarationTail);
-  if (!blockBodyMatch) return null;
+  if (blockBodyMatch) {
+    const braceStart = declarationTail.indexOf("{", blockBodyMatch.index);
+    if (braceStart === -1) return null;
 
-  const braceStart = declarationTail.indexOf("{", blockBodyMatch.index);
-  if (braceStart === -1) return null;
+    const braceEnd = findMatchingBrace(declarationTail, braceStart);
+    if (braceEnd === -1) return null;
 
-  const braceEnd = findMatchingBrace(declarationTail, braceStart);
-  if (braceEnd === -1) return null;
+    return declarationTail.slice(braceStart, braceEnd + 1);
+  }
 
-  return declarationTail.slice(braceStart, braceEnd + 1);
+  const implicitArrowMatch = declarationTail.search(/=>\s*\(\s*\{/);
+  if (implicitArrowMatch === -1) return null;
+
+  const implicitBraceStart = declarationTail.indexOf("{", implicitArrowMatch);
+  if (implicitBraceStart === -1) return null;
+
+  const implicitBraceEnd = findMatchingBrace(declarationTail, implicitBraceStart);
+  if (implicitBraceEnd === -1) return null;
+
+  return declarationTail.slice(0, implicitBraceEnd + 1);
 }
 
 function extractFunctionBody(code: string, functionStart: number): string | null {
+  const bodyEnd = findFunctionBodyEnd(code, functionStart);
+  if (bodyEnd === -1) return null;
+
   const paramsStart = code.indexOf("(", functionStart);
   if (paramsStart === -1) return null;
 
@@ -218,9 +322,6 @@ function extractFunctionBody(code: string, functionStart: number): string | null
 
   const bodyStart = code.indexOf("{", paramsEnd + 1);
   if (bodyStart === -1) return null;
-
-  const bodyEnd = findMatchingBrace(code, bodyStart);
-  if (bodyEnd === -1) return null;
 
   return code.slice(bodyStart, bodyEnd + 1);
 }
@@ -275,26 +376,32 @@ function collectReturnObjectsFromFunctionBody(code: string): string[] {
     }
 
     if (matchesKeywordAt(code, i, "function")) {
-      const nestedBody = extractFunctionBody(code, i);
-      if (nestedBody !== null) {
-        i += nestedBody.length - 1;
+      const nestedBodyEnd = findFunctionBodyEnd(code, i);
+      if (nestedBodyEnd !== -1) {
+        i = nestedBodyEnd;
       }
       continue;
     }
 
     if (matchesKeywordAt(code, i, "class")) {
-      const classBody = extractClassBody(code, i);
-      if (classBody !== null) {
-        i += classBody.length - 1;
+      const classBodyEnd = findClassBodyEnd(code, i);
+      if (classBodyEnd !== -1) {
+        i = classBodyEnd;
       }
       continue;
     }
 
     if (char === "=" && next === ">") {
-      const nestedBody = extractArrowFunctionBody(code, i);
-      if (nestedBody !== null) {
-        i += nestedBody.length - 1;
+      const nestedBodyEnd = findArrowFunctionBodyEnd(code, i);
+      if (nestedBodyEnd !== -1) {
+        i = nestedBodyEnd;
       }
+      continue;
+    }
+
+    const methodBodyEnd = findObjectMethodBodyEnd(code, i);
+    if (methodBodyEnd !== -1) {
+      i = methodBodyEnd;
       continue;
     }
 
@@ -313,24 +420,91 @@ function collectReturnObjectsFromFunctionBody(code: string): string[] {
   return returnObjects;
 }
 
-function extractArrowFunctionBody(code: string, arrowIndex: number): string | null {
-  const bodyStart = findNextNonWhitespaceIndex(code, arrowIndex + 2);
-  if (bodyStart === -1 || code[bodyStart] !== "{") return null;
+function findFunctionBodyEnd(code: string, functionStart: number): number {
+  const paramsStart = code.indexOf("(", functionStart);
+  if (paramsStart === -1) return -1;
 
-  const bodyEnd = findMatchingBrace(code, bodyStart);
-  if (bodyEnd === -1) return null;
+  const paramsEnd = findMatchingParen(code, paramsStart);
+  if (paramsEnd === -1) return -1;
 
-  return code.slice(bodyStart, bodyEnd + 1);
+  const bodyStart = code.indexOf("{", paramsEnd + 1);
+  if (bodyStart === -1) return -1;
+
+  return findMatchingBrace(code, bodyStart);
 }
 
-function extractClassBody(code: string, classStart: number): string | null {
+function findClassBodyEnd(code: string, classStart: number): number {
   const bodyStart = code.indexOf("{", classStart + "class".length);
-  if (bodyStart === -1) return null;
+  if (bodyStart === -1) return -1;
 
-  const bodyEnd = findMatchingBrace(code, bodyStart);
-  if (bodyEnd === -1) return null;
+  return findMatchingBrace(code, bodyStart);
+}
 
-  return code.slice(bodyStart, bodyEnd + 1);
+function findArrowFunctionBodyEnd(code: string, arrowIndex: number): number {
+  const bodyStart = findNextNonWhitespaceIndex(code, arrowIndex + 2);
+  if (bodyStart === -1 || code[bodyStart] !== "{") return -1;
+
+  return findMatchingBrace(code, bodyStart);
+}
+
+function findObjectMethodBodyEnd(code: string, start: number): number {
+  let i = start;
+
+  if (matchesKeywordAt(code, i, "async")) {
+    const afterAsync = findNextNonWhitespaceIndex(code, i + "async".length);
+    if (afterAsync === -1) return -1;
+    if (code[afterAsync] !== "(") {
+      i = afterAsync;
+    }
+  }
+
+  if (code[i] === "*") {
+    i = findNextNonWhitespaceIndex(code, i + 1);
+    if (i === -1) return -1;
+  }
+
+  if (!/[A-Za-z_$]/.test(code[i] ?? "")) return -1;
+
+  const nameStart = i;
+  while (/[A-Za-z0-9_$]/.test(code[i] ?? "")) i++;
+  const name = code.slice(nameStart, i);
+
+  if (
+    name === "if" ||
+    name === "for" ||
+    name === "while" ||
+    name === "switch" ||
+    name === "catch" ||
+    name === "function" ||
+    name === "return" ||
+    name === "const" ||
+    name === "let" ||
+    name === "var" ||
+    name === "new"
+  ) {
+    return -1;
+  }
+
+  if (name === "get" || name === "set") {
+    const afterAccessor = findNextNonWhitespaceIndex(code, i);
+    if (afterAccessor === -1) return -1;
+    if (code[afterAccessor] !== "(") {
+      i = afterAccessor;
+      if (!/[A-Za-z_$]/.test(code[i] ?? "")) return -1;
+      while (/[A-Za-z0-9_$]/.test(code[i] ?? "")) i++;
+    }
+  }
+
+  const paramsStart = findNextNonWhitespaceIndex(code, i);
+  if (paramsStart === -1 || code[paramsStart] !== "(") return -1;
+
+  const paramsEnd = findMatchingParen(code, paramsStart);
+  if (paramsEnd === -1) return -1;
+
+  const bodyStart = findNextNonWhitespaceIndex(code, paramsEnd + 1);
+  if (bodyStart === -1 || code[bodyStart] !== "{") return -1;
+
+  return findMatchingBrace(code, bodyStart);
 }
 
 function findNextNonWhitespaceIndex(code: string, start: number): number {
