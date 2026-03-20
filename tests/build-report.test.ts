@@ -19,6 +19,7 @@ import {
 } from "../packages/vinext/src/build/report.js";
 
 const FIXTURES_PAGES = path.resolve("tests/fixtures/pages-basic/pages");
+const FIXTURES_BUILD_REPORT = path.resolve("tests/fixtures/build-report/pages");
 const FIXTURES_APP = path.resolve("tests/fixtures/app-basic/app");
 
 // ─── hasNamedExport ───────────────────────────────────────────────────────────
@@ -517,64 +518,64 @@ describe("classifyPagesRoute", () => {
   });
 
   it("does not classify an aliased local export as getStaticProps", () => {
-    const filePath = path.resolve("tests/fixtures/pages-basic/pages/build-report-alias-export.tsx");
+    const filePath = path.join(FIXTURES_BUILD_REPORT, "build-report-alias-export.tsx");
     expect(classifyPagesRoute(filePath)).toEqual({ type: "static" });
   });
 
   it("classifies a generic-arrow getStaticProps in a .ts file as isr", () => {
-    const filePath = path.resolve("tests/fixtures/pages-basic/pages/build-report-generic-gsp.ts");
+    const filePath = path.join(FIXTURES_BUILD_REPORT, "build-report-generic-gsp.ts");
     expect(classifyPagesRoute(filePath)).toEqual({ type: "isr", revalidate: 60 });
   });
 
   it("does not classify a default-exported getStaticProps as data fetching", () => {
     const filePath = path.resolve(
-      "tests/fixtures/pages-basic/pages/build-report-default-export-gsp.tsx",
+      path.join(FIXTURES_BUILD_REPORT, "build-report-default-export-gsp.tsx"),
     );
     expect(classifyPagesRoute(filePath)).toEqual({ type: "static" });
   });
 
   it("does not classify a default-exported getServerSideProps as data fetching", () => {
     const filePath = path.resolve(
-      "tests/fixtures/pages-basic/pages/build-report-default-export-gssp.tsx",
+      path.join(FIXTURES_BUILD_REPORT, "build-report-default-export-gssp.tsx"),
     );
     expect(classifyPagesRoute(filePath)).toEqual({ type: "static" });
   });
 
   it("does not classify type-only getStaticProps exports as data fetching", () => {
     const filePath = path.resolve(
-      "tests/fixtures/pages-basic/pages/build-report-type-only-gsp.tsx",
+      path.join(FIXTURES_BUILD_REPORT, "build-report-type-only-gsp.tsx"),
     );
     expect(classifyPagesRoute(filePath)).toEqual({ type: "static" });
   });
 
   it("does not classify type-only getServerSideProps exports as data fetching", () => {
     const filePath = path.resolve(
-      "tests/fixtures/pages-basic/pages/build-report-type-only-gssp.tsx",
+      path.join(FIXTURES_BUILD_REPORT, "build-report-type-only-gssp.tsx"),
     );
     expect(classifyPagesRoute(filePath)).toEqual({ type: "static" });
   });
 
   it("classifies direct getStaticProps re-exports as unknown", () => {
-    const filePath = path.resolve("tests/fixtures/pages-basic/pages/build-report-reexport-gsp.tsx");
+    const filePath = path.join(FIXTURES_BUILD_REPORT, "build-report-reexport-gsp.tsx");
     expect(classifyPagesRoute(filePath)).toEqual({ type: "unknown" });
   });
 
   it("classifies imported getStaticProps re-exports as unknown", () => {
     const filePath = path.resolve(
-      "tests/fixtures/pages-basic/pages/build-report-import-reexport-gsp.tsx",
+      path.join(FIXTURES_BUILD_REPORT, "build-report-import-reexport-gsp.tsx"),
     );
     expect(classifyPagesRoute(filePath)).toEqual({ type: "unknown" });
   });
 
   it("classifies local identifier-aliased getStaticProps as isr", () => {
     const filePath = path.resolve(
-      "tests/fixtures/pages-basic/pages/build-report-local-identifier-gsp.tsx",
+      path.join(FIXTURES_BUILD_REPORT, "build-report-local-identifier-gsp.tsx"),
     );
     expect(classifyPagesRoute(filePath)).toEqual({ type: "isr", revalidate: 60 });
   });
 
   it("classifies non-analyzable local getStaticProps factories as unknown", () => {
-    const filePath = path.resolve("tests/fixtures/pages-basic/pages/build-report-factory-gsp.tsx");
+    const filePath = path.join(FIXTURES_BUILD_REPORT, "build-report-factory-gsp.tsx");
     expect(classifyPagesRoute(filePath)).toEqual({ type: "unknown" });
   });
 });
@@ -711,7 +712,7 @@ describe("buildReportRows", () => {
       {
         pattern: "/reexported-gsp",
         patternParts: ["/reexported-gsp"],
-        filePath: path.resolve("tests/fixtures/pages-basic/pages/build-report-reexport-gsp.tsx"),
+        filePath: path.join(FIXTURES_BUILD_REPORT, "build-report-reexport-gsp.tsx"),
         isDynamic: false,
         params: [],
       },
