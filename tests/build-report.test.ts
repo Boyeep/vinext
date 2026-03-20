@@ -1,7 +1,7 @@
 /**
  * Build report tests — verifies route classification, formatting, and sorting.
  *
- * Tests the regex-based export detection helpers and the classification
+ * Tests the AST-based export detection helpers and the classification
  * logic for both Pages Router and App Router routes, using real fixture files
  * where integration testing is needed.
  */
@@ -49,11 +49,52 @@ describe("hasNamedExport", () => {
   });
 
   it("detects re-export with alias", () => {
-    expect(hasNamedExport("export { getStaticProps as gsp };", "getStaticProps")).toBe(true);
+    expect(hasNamedExport("export { getStaticProps as gsp };", "gsp")).toBe(true);
+  });
+
+  it("detects aliased export name from a local binding", () => {
+    expect(hasNamedExport("const foo = 1; export { foo as revalidate };", "revalidate")).toBe(true);
+  });
+
+  it("does not treat the local side of an aliased export as the exported name", () => {
+    expect(hasNamedExport("export { getStaticProps as helper };", "getStaticProps")).toBe(false);
   });
 
   it("returns false when export is absent", () => {
     expect(hasNamedExport("export default function Page() {}", "getStaticProps")).toBe(false);
+  });
+
+  it("does not treat default-exported getStaticProps as a named export", () => {
+    expect(hasNamedExport("export default function getStaticProps() {}", "getStaticProps")).toBe(
+      false,
+    );
+  });
+
+  it("does not treat default-exported getServerSideProps as a named export", () => {
+    expect(
+      hasNamedExport("export default async function getServerSideProps() {}", "getServerSideProps"),
+    ).toBe(false);
+  });
+
+  it("does not treat `export type` re-exports as named runtime exports", () => {
+    expect(
+      hasNamedExport('export type { getStaticProps } from "./shared";', "getStaticProps"),
+    ).toBe(false);
+  });
+
+  it("does not treat `export { type ... }` specifiers as named runtime exports", () => {
+    expect(
+      hasNamedExport('export { type getServerSideProps } from "./shared";', "getServerSideProps"),
+    ).toBe(false);
+  });
+
+  it("does not treat declared exports as named runtime exports", () => {
+    expect(
+      hasNamedExport(
+        "export declare function getServerSideProps(): Promise<void>;",
+        "getServerSideProps",
+      ),
+    ).toBe(false);
   });
 
   it("does not match partial names (false positive guard)", () => {
@@ -94,12 +135,39 @@ describe("extractExportConstString", () => {
     );
   });
 
+  it("extracts value from an `as const` string export", () => {
+    expect(
+      extractExportConstString("export const dynamic = 'force-static' as const;", "dynamic"),
+    ).toBe("force-static");
+  });
+
+  it("extracts value from a `satisfies` string export", () => {
+    expect(
+      extractExportConstString(
+        "export const dynamic = 'force-static' satisfies string;",
+        "dynamic",
+      ),
+    ).toBe("force-static");
+  });
+
   it("returns null when export is absent", () => {
     expect(extractExportConstString("export const revalidate = 60;", "dynamic")).toBeNull();
   });
 
   it("returns null for non-string value", () => {
     expect(extractExportConstString("export const revalidate = 60;", "revalidate")).toBeNull();
+  });
+
+  it("extracts string from a local const re-exported by specifier", () => {
+    expect(
+      extractExportConstString("const mode = 'error'; export { mode as dynamic };", "dynamic"),
+    ).toBe("error");
+  });
+
+  it("extracts string from a local const identifier alias", () => {
+    expect(
+      extractExportConstString("const mode = 'error'; export const dynamic = mode;", "dynamic"),
+    ).toBe("error");
   });
 });
 
@@ -130,8 +198,38 @@ describe("extractExportConstNumber", () => {
     );
   });
 
+  it("extracts from an `as const` numeric export", () => {
+    expect(extractExportConstNumber("export const revalidate = 60 as const;", "revalidate")).toBe(
+      60,
+    );
+  });
+
+  it("extracts from a `satisfies` numeric export", () => {
+    expect(
+      extractExportConstNumber("export const revalidate = 60 satisfies number;", "revalidate"),
+    ).toBe(60);
+  });
+
   it("returns null when export is absent", () => {
     expect(extractExportConstNumber("export const dynamic = 'auto';", "revalidate")).toBeNull();
+  });
+
+  it("extracts number from a local const re-exported by specifier", () => {
+    expect(
+      extractExportConstNumber(
+        "const interval = 120; export { interval as revalidate };",
+        "revalidate",
+      ),
+    ).toBe(120);
+  });
+
+  it("extracts number from a local const identifier alias", () => {
+    expect(
+      extractExportConstNumber(
+        "const interval = 120; export const revalidate = interval;",
+        "revalidate",
+      ),
+    ).toBe(120);
   });
 });
 
@@ -141,6 +239,20 @@ describe("extractGetStaticPropsRevalidate", () => {
   it("extracts positive integer revalidate", () => {
     const code = `export async function getStaticProps() {
   return { props: {}, revalidate: 60 };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBe(60);
+  });
+
+  it("extracts revalidate from an `as const` value inside getStaticProps", () => {
+    const code = `export async function getStaticProps() {
+  return { props: {}, revalidate: 60 as const };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBe(60);
+  });
+
+  it("extracts revalidate from a `satisfies` value inside getStaticProps", () => {
+    const code = `export async function getStaticProps() {
+  return { props: {}, revalidate: 60 satisfies number };
 }`;
     expect(extractGetStaticPropsRevalidate(code)).toBe(60);
   });
@@ -220,6 +332,17 @@ export function unrelated() {
   return { props: { slug: params?.slug ?? null }, revalidate: 60 };
 }`;
     expect(extractGetStaticPropsRevalidate(code)).toBe(60);
+  });
+
+  it("extracts revalidate from a generic arrow-function getStaticProps", () => {
+    const code = `export const getStaticProps = <T>() => ({ props: {}, revalidate: 60 });`;
+    expect(extractGetStaticPropsRevalidate(code)).toBe(60);
+  });
+
+  it("respects the provided file extension when parsing generic arrow getStaticProps", () => {
+    const code = `export const getStaticProps = <T>() => ({ props: {}, revalidate: 60 });`;
+    expect(extractGetStaticPropsRevalidate(code, "page.ts")).toBe(60);
+    expect(extractGetStaticPropsRevalidate(code, "page.tsx")).toBeNull();
   });
 
   it("ignores revalidate in a nested helper function inside getStaticProps", () => {
@@ -312,11 +435,56 @@ export { getStaticProps } from "./shared";
     expect(extractGetStaticPropsRevalidate(code)).toBeNull();
   });
 
+  it("ignores fallback-path returns when an imported getStaticProps is re-exported locally", () => {
+    const code = `import { getStaticProps } from "./shared";
+export { getStaticProps };
+
+return { props: {}, revalidate: 1 };`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
+  });
+
   it("handles inline comment after value (fixture file style)", () => {
     // From tests/fixtures/pages-basic/pages/isr-test.tsx:
     //   revalidate: 1, // Revalidate every 1 second
     const code = `return { props: {}, revalidate: 1, // comment\n};`;
     expect(extractGetStaticPropsRevalidate(code)).toBe(1);
+  });
+
+  it("extracts revalidate when getStaticProps is exported under an alias", () => {
+    const code = `const loadStaticProps = async () => {
+  return { props: {}, revalidate: 60 };
+};
+
+export { loadStaticProps as getStaticProps };`;
+    expect(extractGetStaticPropsRevalidate(code)).toBe(60);
+  });
+
+  it("extracts revalidate when getStaticProps is exported before its local declaration", () => {
+    const code = `export { getStaticProps };
+
+const getStaticProps = async () => {
+  return { props: {}, revalidate: 60 };
+};`;
+    expect(extractGetStaticPropsRevalidate(code)).toBe(60);
+  });
+
+  it("extracts revalidate when getStaticProps is exported via a local identifier alias", () => {
+    const code = `const loadStaticProps = async () => ({ props: {}, revalidate: 60 });
+export const getStaticProps = loadStaticProps;`;
+    expect(extractGetStaticPropsRevalidate(code)).toBe(60);
+  });
+
+  it("does not fall back to unrelated top-level returns for non-analyzable local getStaticProps", () => {
+    const code = `function createGSP() {
+  return async function generatedGetStaticProps() {
+    return { props: {}, revalidate: 60 };
+  };
+}
+
+export const getStaticProps = createGSP();
+
+return { props: {}, revalidate: 1 };`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
   });
 });
 
@@ -346,6 +514,68 @@ describe("classifyPagesRoute", () => {
 
   it("returns unknown on file read failure (consistent with classifyAppRoute)", () => {
     expect(classifyPagesRoute("/nonexistent/pages/page.tsx")).toEqual({ type: "unknown" });
+  });
+
+  it("does not classify an aliased local export as getStaticProps", () => {
+    const filePath = path.resolve("tests/fixtures/pages-basic/pages/build-report-alias-export.tsx");
+    expect(classifyPagesRoute(filePath)).toEqual({ type: "static" });
+  });
+
+  it("classifies a generic-arrow getStaticProps in a .ts file as isr", () => {
+    const filePath = path.resolve("tests/fixtures/pages-basic/pages/build-report-generic-gsp.ts");
+    expect(classifyPagesRoute(filePath)).toEqual({ type: "isr", revalidate: 60 });
+  });
+
+  it("does not classify a default-exported getStaticProps as data fetching", () => {
+    const filePath = path.resolve(
+      "tests/fixtures/pages-basic/pages/build-report-default-export-gsp.tsx",
+    );
+    expect(classifyPagesRoute(filePath)).toEqual({ type: "static" });
+  });
+
+  it("does not classify a default-exported getServerSideProps as data fetching", () => {
+    const filePath = path.resolve(
+      "tests/fixtures/pages-basic/pages/build-report-default-export-gssp.tsx",
+    );
+    expect(classifyPagesRoute(filePath)).toEqual({ type: "static" });
+  });
+
+  it("does not classify type-only getStaticProps exports as data fetching", () => {
+    const filePath = path.resolve(
+      "tests/fixtures/pages-basic/pages/build-report-type-only-gsp.tsx",
+    );
+    expect(classifyPagesRoute(filePath)).toEqual({ type: "static" });
+  });
+
+  it("does not classify type-only getServerSideProps exports as data fetching", () => {
+    const filePath = path.resolve(
+      "tests/fixtures/pages-basic/pages/build-report-type-only-gssp.tsx",
+    );
+    expect(classifyPagesRoute(filePath)).toEqual({ type: "static" });
+  });
+
+  it("classifies direct getStaticProps re-exports as unknown", () => {
+    const filePath = path.resolve("tests/fixtures/pages-basic/pages/build-report-reexport-gsp.tsx");
+    expect(classifyPagesRoute(filePath)).toEqual({ type: "unknown" });
+  });
+
+  it("classifies imported getStaticProps re-exports as unknown", () => {
+    const filePath = path.resolve(
+      "tests/fixtures/pages-basic/pages/build-report-import-reexport-gsp.tsx",
+    );
+    expect(classifyPagesRoute(filePath)).toEqual({ type: "unknown" });
+  });
+
+  it("classifies local identifier-aliased getStaticProps as isr", () => {
+    const filePath = path.resolve(
+      "tests/fixtures/pages-basic/pages/build-report-local-identifier-gsp.tsx",
+    );
+    expect(classifyPagesRoute(filePath)).toEqual({ type: "isr", revalidate: 60 });
+  });
+
+  it("classifies non-analyzable local getStaticProps factories as unknown", () => {
+    const filePath = path.resolve("tests/fixtures/pages-basic/pages/build-report-factory-gsp.tsx");
+    expect(classifyPagesRoute(filePath)).toEqual({ type: "unknown" });
   });
 });
 
@@ -474,6 +704,34 @@ describe("buildReportRows", () => {
     const rows = buildReportRows({ pageRoutes });
     expect(rows[0].pattern).toBe("/aaa");
     expect(rows[1].pattern).toBe("/zzz");
+  });
+
+  it("upgrades unknown Pages routes to static when speculative prerender rendered them", () => {
+    const pageRoutes = [
+      {
+        pattern: "/reexported-gsp",
+        patternParts: ["/reexported-gsp"],
+        filePath: path.resolve("tests/fixtures/pages-basic/pages/build-report-reexport-gsp.tsx"),
+        isDynamic: false,
+        params: [],
+      },
+    ];
+
+    const rows = buildReportRows({
+      pageRoutes,
+      prerenderResult: {
+        routes: [
+          {
+            route: "/reexported-gsp",
+            status: "rendered",
+            outputFiles: ["index.html"],
+            revalidate: false,
+          },
+        ],
+      },
+    });
+
+    expect(rows).toEqual([{ pattern: "/reexported-gsp", type: "static", prerendered: true }]);
   });
 });
 
