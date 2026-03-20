@@ -2107,16 +2107,48 @@ describe("replyToCacheKey deterministic hashing", () => {
 describe("middleware runner", () => {
   it("findMiddlewareFile finds middleware.ts at project root", async () => {
     const { findMiddlewareFile } = await import("../packages/vinext/src/server/middleware.js");
+    const { createValidFileMatcher } =
+      await import("../packages/vinext/src/routing/file-matcher.js");
     // pages-basic fixture has middleware.ts
-    const result = findMiddlewareFile(FIXTURE_DIR);
+    const result = findMiddlewareFile(FIXTURE_DIR, createValidFileMatcher());
     expect(result).not.toBeNull();
     expect(result).toContain("middleware.ts");
   });
 
   it("findMiddlewareFile returns null when no middleware exists", async () => {
     const { findMiddlewareFile } = await import("../packages/vinext/src/server/middleware.js");
-    const result = findMiddlewareFile("/tmp/nonexistent-dir-" + Date.now());
+    const { createValidFileMatcher } =
+      await import("../packages/vinext/src/routing/file-matcher.js");
+    const result = findMiddlewareFile(
+      "/tmp/nonexistent-dir-" + Date.now(),
+      createValidFileMatcher(),
+    );
     expect(result).toBeNull();
+  });
+
+  it("findMiddlewareFile does not find middleware.ts when ts is not a configured pageExtension", async () => {
+    const { findMiddlewareFile } = await import("../packages/vinext/src/server/middleware.js");
+    const { createValidFileMatcher } =
+      await import("../packages/vinext/src/routing/file-matcher.js");
+    // FIXTURE_DIR has middleware.ts — restricting to mdx only means it should not match
+    const result = findMiddlewareFile(FIXTURE_DIR, createValidFileMatcher(["mdx"]));
+    expect(result).toBeNull();
+  });
+
+  it("findMiddlewareFile emits a deprecation warning when middleware.ts is found", async () => {
+    const { findMiddlewareFile } = await import("../packages/vinext/src/server/middleware.js");
+    const { createValidFileMatcher } =
+      await import("../packages/vinext/src/routing/file-matcher.js");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      findMiddlewareFile(FIXTURE_DIR, createValidFileMatcher());
+      expect(warnSpy).toHaveBeenCalledOnce();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("middleware.ts is deprecated in Next.js 16"),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("findMiddlewareFile prefers proxy.ts over middleware.ts (Next.js 16)", async () => {
@@ -2124,13 +2156,15 @@ describe("middleware runner", () => {
     const path = await import("node:path");
     const os = await import("node:os");
     const { findMiddlewareFile } = await import("../packages/vinext/src/server/middleware.js");
+    const { createValidFileMatcher } =
+      await import("../packages/vinext/src/routing/file-matcher.js");
 
     // Create a temp directory with both proxy.ts and middleware.ts
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-proxy-test-"));
     try {
       fs.writeFileSync(path.join(tmpDir, "proxy.ts"), "export default function proxy() {}");
       fs.writeFileSync(path.join(tmpDir, "middleware.ts"), "export function middleware() {}");
-      const result = findMiddlewareFile(tmpDir);
+      const result = findMiddlewareFile(tmpDir, createValidFileMatcher());
       expect(result).not.toBeNull();
       expect(result).toContain("proxy.ts");
     } finally {
@@ -2143,11 +2177,13 @@ describe("middleware runner", () => {
     const path = await import("node:path");
     const os = await import("node:os");
     const { findMiddlewareFile } = await import("../packages/vinext/src/server/middleware.js");
+    const { createValidFileMatcher } =
+      await import("../packages/vinext/src/routing/file-matcher.js");
 
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-proxy-test-"));
     try {
       fs.writeFileSync(path.join(tmpDir, "proxy.js"), "module.exports = function proxy() {}");
-      const result = findMiddlewareFile(tmpDir);
+      const result = findMiddlewareFile(tmpDir, createValidFileMatcher());
       expect(result).not.toBeNull();
       expect(result).toContain("proxy.js");
     } finally {
@@ -10756,5 +10792,75 @@ describe("shim alias map .js variants", () => {
 
     const missing = topLevel.filter((key) => !(key + ".js" in aliases!));
     expect(missing, `Missing .js aliases for: ${missing.join(", ")}`).toEqual([]);
+  });
+});
+
+// ── next/head attribute name validation ─────────────────────────────────────
+
+describe("isSafeAttrName", () => {
+  let isSafeAttrName: (name: string) => boolean;
+
+  beforeEach(async () => {
+    const mod = await import("../packages/vinext/src/shims/head.js");
+    isSafeAttrName = mod.isSafeAttrName;
+  });
+
+  it("allows standard HTML attribute names", () => {
+    expect(isSafeAttrName("name")).toBe(true);
+    expect(isSafeAttrName("content")).toBe(true);
+    expect(isSafeAttrName("charset")).toBe(true);
+    expect(isSafeAttrName("http-equiv")).toBe(true);
+    expect(isSafeAttrName("data-testid")).toBe(true);
+    expect(isSafeAttrName("property")).toBe(true);
+    expect(isSafeAttrName("rel")).toBe(true);
+    expect(isSafeAttrName("href")).toBe(true);
+    expect(isSafeAttrName("crossOrigin")).toBe(true);
+  });
+
+  it("allows xml-namespaced attributes", () => {
+    expect(isSafeAttrName("xml:lang")).toBe(true);
+    expect(isSafeAttrName("xlink:href")).toBe(true);
+  });
+
+  it("rejects attribute names containing quotes", () => {
+    expect(isSafeAttrName('x"')).toBe(false);
+    expect(isSafeAttrName("x'")).toBe(false);
+  });
+
+  it("rejects attribute names containing angle brackets", () => {
+    expect(isSafeAttrName("x>")).toBe(false);
+    expect(isSafeAttrName("x<script")).toBe(false);
+  });
+
+  it("rejects attribute names containing slashes", () => {
+    expect(isSafeAttrName("x/")).toBe(false);
+    expect(isSafeAttrName('x"/><script>alert(1)</script><meta a="')).toBe(false);
+  });
+
+  it("rejects attribute names containing spaces", () => {
+    expect(isSafeAttrName("x y")).toBe(false);
+    expect(isSafeAttrName("x\ty")).toBe(false);
+  });
+
+  it("rejects attribute names containing equals", () => {
+    expect(isSafeAttrName("x=y")).toBe(false);
+  });
+
+  it("rejects inline event handler attributes", () => {
+    expect(isSafeAttrName("onclick")).toBe(false);
+    expect(isSafeAttrName("onerror")).toBe(false);
+    expect(isSafeAttrName("onload")).toBe(false);
+    expect(isSafeAttrName("onmouseover")).toBe(false);
+  });
+
+  it("allows attributes starting with 'o' that are not event handlers", () => {
+    expect(isSafeAttrName("open")).toBe(true);
+    expect(isSafeAttrName("og:title")).toBe(true);
+  });
+
+  it("rejects empty or non-alpha-starting names", () => {
+    expect(isSafeAttrName("")).toBe(false);
+    expect(isSafeAttrName("123")).toBe(false);
+    expect(isSafeAttrName("-foo")).toBe(false);
   });
 });

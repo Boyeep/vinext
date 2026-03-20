@@ -192,7 +192,7 @@ export async function runPrerender(options: RunPrerenderOptions): Promise<Preren
 
     // ── App Router phase ──────────────────────────────────────────────────────
     if (appDir) {
-      const routes = await appRouter(appDir);
+      const routes = await appRouter(appDir, config.pageExtensions);
 
       // We don't know the exact render-queue size until prerenderApp starts, so
       // use the progress callback's `total` to update our combined total on the
@@ -224,8 +224,8 @@ export async function runPrerender(options: RunPrerenderOptions): Promise<Preren
     // ── Pages Router phase ────────────────────────────────────────────────────
     if (pagesDir) {
       const [pageRoutes, apiRoutes] = await Promise.all([
-        pagesRouter(pagesDir),
-        apiRouter(pagesDir),
+        pagesRouter(pagesDir, config.pageExtensions),
+        apiRouter(pagesDir, config.pageExtensions),
       ]);
 
       let pagesTotal = 0;
