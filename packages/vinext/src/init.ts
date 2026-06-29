@@ -57,8 +57,9 @@ function isApproveBuildsError(error: unknown): boolean {
     typeof error === "object" && error && "stdout" in error ? String(error.stdout) : "",
     typeof error === "object" && error && "stderr" in error ? String(error.stderr) : "",
   ].join("\n");
-  return /approve-builds|ignored build scripts|blocked build scripts|ERR_PNPM_.*BUILD/i.test(
-    details,
+  return (
+    /approve-builds|ERR_PNPM_.*BUILD/i.test(details) ||
+    (/pnpm/i.test(details) && /(ignored build scripts|blocked build scripts)/i.test(details))
   );
 }
 
