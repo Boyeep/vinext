@@ -277,14 +277,8 @@ export class NextResponse<_Body = unknown> extends Response {
    * Create a JSON response.
    */
   static json<JsonBody>(body: JsonBody, init?: ResponseInit): NextResponse<JsonBody> {
-    const headers = new Headers(init?.headers);
-    if (!headers.has("content-type")) {
-      headers.set("content-type", "application/json");
-    }
-    return new NextResponse(JSON.stringify(body), {
-      ...init,
-      headers,
-    }) as NextResponse<JsonBody>;
+    const response = Response.json(body, init);
+    return new NextResponse(response.body, response) as NextResponse<JsonBody>;
   }
 
   /**
