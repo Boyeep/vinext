@@ -804,25 +804,15 @@ export function sealRequestCookies(cookies: RequestCookies): RequestCookies {
 export class ResponseCookies {
   private _headers: Headers;
   /** Internal map keyed by cookie name — single source of truth. */
-  private _parsed: Map<string, { serialized: string; entry: CookieEntry }> = new Map();
+  private _parsed: Map<string, { serialized: string; entry: ResponseCookieEntry }> = new Map();
 
   constructor(headers: Headers) {
     this._headers = headers;
 
     // Hydrate internal map from any existing Set-Cookie headers
     for (const header of headers.getSetCookie()) {
-      const eq = header.indexOf("=");
-      if (eq === -1) continue;
-      const cookieName = header.slice(0, eq);
-      const semi = header.indexOf(";", eq);
-      const raw = header.slice(eq + 1, semi === -1 ? undefined : semi);
-      let value: string;
-      try {
-        value = decodeURIComponent(raw);
-      } catch {
-        value = raw;
-      }
-      this._parsed.set(cookieName, { serialized: header, entry: { name: cookieName, value } });
+      const entry = parseSetCookieHeader(header);
+      if (entry) this._parsed.set(entry.name, { serialized: header, entry });
     }
   }
 
@@ -834,23 +824,27 @@ export class ResponseCookies {
     const [name, value, opts] = parseCookieSetArgs(args);
     validateCookieName(name);
 
+    const entry = normalizeResponseCookie(name, value, opts);
     const sameSite =
-      opts?.sameSite === true
+      entry.sameSite === true
         ? "Strict"
-        : typeof opts?.sameSite === "string"
-          ? ((opts.sameSite[0].toUpperCase() + opts.sameSite.slice(1)) as "Strict" | "Lax" | "None")
+        : typeof entry.sameSite === "string"
+          ? ((entry.sameSite[0].toUpperCase() + entry.sameSite.slice(1)) as
+              | "Strict"
+              | "Lax"
+              | "None")
           : undefined;
     const serialized = serializeSetCookie(name, value, {
-      ...opts,
-      expires: typeof opts?.expires === "number" ? new Date(opts.expires) : opts?.expires,
+      ...entry,
+      expires: typeof entry.expires === "number" ? new Date(entry.expires) : entry.expires,
       sameSite,
     });
-    this._parsed.set(name, { serialized, entry: { name, value } });
+    this._parsed.set(name, { serialized, entry });
     this._syncHeaders();
     return this;
   }
 
-  get(...args: [name: string] | [options: { name: string }]): CookieEntry | undefined {
+  get(...args: [name: string] | [options: { name: string }]): ResponseCookieEntry | undefined {
     const key = typeof args[0] === "string" ? args[0] : args[0].name;
     return this._parsed.get(key)?.entry;
   }
@@ -859,7 +853,7 @@ export class ResponseCookies {
     return this._parsed.has(name);
   }
 
-  getAll(...args: [name: string] | [options: { name: string }] | []): CookieEntry[] {
+  getAll(...args: [name: string] | [options: { name: string }] | []): ResponseCookieEntry[] {
     const all = [...this._parsed.values()].map((v) => v.entry);
     if (args.length === 0) return all;
     const key = typeof args[0] === "string" ? args[0] : args[0].name;
@@ -885,10 +879,14 @@ export class ResponseCookies {
     });
   }
 
-  [Symbol.iterator](): MapIterator<[string, CookieEntry]> {
+  [Symbol.iterator](): MapIterator<[string, ResponseCookieEntry]> {
     return new Map(
       [...this._parsed.values()].map(({ entry }) => [entry.name, entry] as const),
     ).entries();
+  }
+
+  toString(): string {
+    return [...this._parsed.values()].map(({ serialized }) => serialized).join("; ");
   }
 
   /** Delete all Set-Cookie headers and re-append from the internal map. */
@@ -950,6 +948,113 @@ type CookieOptions = {
   partitioned?: boolean;
   priority?: "low" | "medium" | "high";
 };
+
+type ResponseCookieEntry = CookieEntry &
+  Omit<CookieOptions, "sameSite"> & {
+    sameSite?: true | false | "strict" | "lax" | "none";
+  };
+
+function normalizeResponseCookie(
+  name: string,
+  value: string,
+  options?: CookieOptions,
+): ResponseCookieEntry {
+  const { sameSite, ...rest } = options ?? {};
+  const normalizedSameSite =
+    typeof sameSite === "string" ? (sameSite.toLowerCase() as "strict" | "lax" | "none") : sameSite;
+  const cookie: ResponseCookieEntry = {
+    name,
+    value,
+    ...rest,
+    ...(normalizedSameSite !== undefined && { sameSite: normalizedSameSite }),
+  };
+  if (typeof cookie.expires === "number") {
+    cookie.expires = new Date(cookie.expires);
+  }
+  if (cookie.maxAge) {
+    cookie.expires = new Date(Date.now() + cookie.maxAge * 1000);
+  }
+  if (cookie.path == null) {
+    cookie.path = "/";
+  }
+  return cookie;
+}
+
+function parseSetCookieHeader(header: string): ResponseCookieEntry | undefined {
+  const [nameValue, ...attributes] = header.split(/;\s*/);
+  const separator = nameValue.indexOf("=");
+  if (separator === -1) return undefined;
+
+  const name = nameValue.slice(0, separator).trim();
+  if (!name) return undefined;
+
+  const cookie: ResponseCookieEntry = {
+    name,
+    value: decodeCookieComponent(nameValue.slice(separator + 1)),
+  };
+
+  for (const attribute of attributes) {
+    const attributeSeparator = attribute.indexOf("=");
+    const key = (attributeSeparator === -1 ? attribute : attribute.slice(0, attributeSeparator))
+      .trim()
+      .toLowerCase()
+      .replaceAll("-", "");
+    const value =
+      attributeSeparator === -1
+        ? undefined
+        : decodeCookieComponent(attribute.slice(attributeSeparator + 1).trim());
+
+    switch (key) {
+      case "domain":
+        if (value) cookie.domain = value;
+        break;
+      case "expires":
+        if (value) cookie.expires = new Date(value);
+        break;
+      case "httponly":
+        cookie.httpOnly = true;
+        break;
+      case "maxage": {
+        const maxAge = Number(value);
+        if (maxAge) cookie.maxAge = maxAge;
+        break;
+      }
+      case "path":
+        if (value) cookie.path = value;
+        break;
+      case "samesite": {
+        const sameSite = value?.toLowerCase();
+        if (sameSite === "strict" || sameSite === "lax" || sameSite === "none") {
+          cookie.sameSite = sameSite;
+        }
+        break;
+      }
+      case "secure":
+        cookie.secure = true;
+        break;
+      case "partitioned":
+        cookie.partitioned = true;
+        break;
+      case "priority": {
+        const priority = value?.toLowerCase();
+        if (priority === "low" || priority === "medium" || priority === "high") {
+          cookie.priority = priority;
+        }
+        break;
+      }
+    }
+  }
+
+  return cookie;
+}
+
+function decodeCookieComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
 
 /**
  * Parse the overloaded arguments for ResponseCookies.set():
