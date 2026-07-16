@@ -16,11 +16,7 @@ import {
 } from "../server/headers.js";
 import { buildRequestHeadersFromMiddlewareResponse } from "../utils/middleware-request-headers.js";
 import { getOrCreateAls } from "./internal/als-registry.js";
-import {
-  serializeSetCookie,
-  validateCookieAttributeValue,
-  validateCookieName,
-} from "./internal/cookie-serialize.js";
+import { serializeSetCookie, validateCookieName } from "./internal/cookie-serialize.js";
 import { parseEdgeRequestCookieHeader } from "../utils/parse-cookie.js";
 import {
   isInsideUnifiedScope,
@@ -104,8 +100,6 @@ const _fallbackState = (_g[_FALLBACK_KEY] ??= {
   draftModeCookieHeader: null,
   phase: "render",
 } satisfies VinextHeadersShimState) as VinextHeadersShimState;
-const EXPIRED_COOKIE_DATE = new Date(0).toUTCString();
-
 function splitMiddlewareSetCookieHeader(value: string): string[] {
   const cookies: string[] = [];
   let start = 0;
@@ -845,7 +839,7 @@ function _sealCookies(cookies: RequestCookies): RequestCookies {
 
 function _getMutableCookies(ctx: HeadersContext): RequestCookies {
   if (!ctx.mutableCookies) {
-    ctx.mutableCookies = _wrapMutableCookies(new RequestCookies(ctx.cookies));
+    ctx.mutableCookies = _wrapMutableCookies(new RequestCookies(ctx.cookies, true));
   }
 
   return ctx.mutableCookies;
@@ -1233,20 +1227,34 @@ export async function draftMode(): Promise<DraftModeResult> {
 
 class RequestCookies {
   private _cookies: Map<string, string>;
+  private _responseCookies: Map<string, ResponseCookie> | null;
 
-  constructor(cookies: Map<string, string>) {
+  constructor(cookies: Map<string, string>, mutable = false) {
     this._cookies = cookies;
+    this._responseCookies = mutable
+      ? new Map(
+          Array.from(cookies, ([name, value]) => [name, normalizeMutableCookie({ name, value })]),
+        )
+      : null;
   }
 
-  get(name: string): { name: string; value: string } | undefined {
+  get(name: string): ResponseCookie | undefined {
+    if (this._responseCookies) return this._responseCookies.get(name);
     const value = this._cookies.get(name);
     if (value === undefined) return undefined;
     return { name, value };
   }
 
-  getAll(nameOrOptions?: string | { name: string }): Array<{ name: string; value: string }> {
+  getAll(nameOrOptions?: string | { name: string }): ResponseCookie[] {
     const name = typeof nameOrOptions === "string" ? nameOrOptions : nameOrOptions?.name;
-    const result: Array<{ name: string; value: string }> = [];
+    if (this._responseCookies) {
+      const responseCookies = [...this._responseCookies.values()];
+      return name === undefined
+        ? responseCookies
+        : responseCookies.filter((cookie) => cookie.name === name);
+    }
+
+    const result: ResponseCookie[] = [];
     for (const [cookieName, value] of this._cookies) {
       if (name === undefined || cookieName === name) {
         result.push({ name: cookieName, value });
@@ -1256,7 +1264,7 @@ class RequestCookies {
   }
 
   has(name: string): boolean {
-    return this._cookies.has(name);
+    return this._responseCookies?.has(name) ?? this._cookies.has(name);
   }
 
   /**
@@ -1286,22 +1294,15 @@ class RequestCookies {
 
     validateCookieName(cookieName);
 
-    // Update the local cookie map
+    const responseCookie = normalizeMutableCookie({
+      name: cookieName,
+      value: cookieValue,
+      ...opts,
+    });
     this._cookies.set(cookieName, cookieValue);
+    this._ensureResponseCookies().set(cookieName, responseCookie);
 
-    const sameSite =
-      opts?.sameSite === true
-        ? "Strict"
-        : typeof opts?.sameSite === "string"
-          ? ((opts.sameSite[0].toUpperCase() + opts.sameSite.slice(1)) as "Strict" | "Lax" | "None")
-          : undefined;
-    _getState().pendingSetCookies.push(
-      serializeSetCookie(cookieName, cookieValue, {
-        ...opts,
-        expires: typeof opts?.expires === "number" ? new Date(opts.expires) : opts?.expires,
-        sameSite,
-      }),
-    );
+    _getState().pendingSetCookies.push(serializeMutableCookie(responseCookie));
     return this;
   }
 
@@ -1312,40 +1313,81 @@ class RequestCookies {
   delete(options: Omit<ResponseCookie, "value" | "expires">): this;
   delete(nameOrOptions: string | Omit<ResponseCookie, "value" | "expires">): this {
     const name = typeof nameOrOptions === "string" ? nameOrOptions : nameOrOptions.name;
-    const path = typeof nameOrOptions === "string" ? "/" : (nameOrOptions.path ?? "/");
-    const domain = typeof nameOrOptions === "string" ? undefined : nameOrOptions.domain;
-
     validateCookieName(name);
-    validateCookieAttributeValue(path, "Path");
-    if (domain) {
-      validateCookieAttributeValue(domain, "Domain");
-    }
-
-    this._cookies.delete(name);
-    const parts = [`${name}=`, `Path=${path}`];
-    if (domain) parts.push(`Domain=${domain}`);
-    parts.push(`Expires=${EXPIRED_COOKIE_DATE}`);
-    _getState().pendingSetCookies.push(parts.join("; "));
+    const responseCookie = normalizeMutableCookie({
+      ...(typeof nameOrOptions === "string" ? undefined : nameOrOptions),
+      name,
+      value: "",
+      expires: new Date(0),
+    });
+    this._cookies.set(name, "");
+    this._ensureResponseCookies().set(name, responseCookie);
+    _getState().pendingSetCookies.push(serializeMutableCookie(responseCookie));
     return this;
   }
 
   get size(): number {
-    return this._cookies.size;
+    return this._responseCookies?.size ?? this._cookies.size;
   }
 
-  [Symbol.iterator](): MapIterator<[string, { name: string; value: string }]> {
-    return new Map(
-      Array.from(this._cookies, ([name, value]) => [name, { name, value }] as const),
-    ).entries();
+  [Symbol.iterator](): MapIterator<[string, ResponseCookie]> {
+    return new Map(this.getAll().map((cookie) => [cookie.name, cookie] as const)).entries();
   }
 
   toString(): string {
+    if (this._responseCookies) {
+      return [...this._responseCookies.values()].map(serializeMutableCookie).join("; ");
+    }
+
     const parts: string[] = [];
     for (const [name, value] of this._cookies) {
-      parts.push(`${name}=${value}`);
+      parts.push(`${name}=${encodeURIComponent(value)}`);
     }
     return parts.join("; ");
   }
+
+  private _ensureResponseCookies(): Map<string, ResponseCookie> {
+    if (!this._responseCookies) {
+      this._responseCookies = new Map(
+        Array.from(this._cookies, ([name, value]) => [
+          name,
+          normalizeMutableCookie({ name, value }),
+        ]),
+      );
+    }
+    return this._responseCookies;
+  }
+}
+
+function normalizeMutableCookie(cookie: ResponseCookie): ResponseCookie {
+  const normalized = { ...cookie };
+  if (typeof normalized.expires === "number") {
+    normalized.expires = new Date(normalized.expires);
+  }
+  if (normalized.maxAge) {
+    normalized.expires = new Date(Date.now() + normalized.maxAge * 1000);
+  }
+  if (normalized.path == null) {
+    normalized.path = "/";
+  }
+  return normalized;
+}
+
+function serializeMutableCookie(cookie: ResponseCookie): string {
+  const sameSite =
+    cookie.sameSite === true
+      ? "Strict"
+      : typeof cookie.sameSite === "string"
+        ? ((cookie.sameSite[0].toUpperCase() + cookie.sameSite.slice(1)) as
+            | "Strict"
+            | "Lax"
+            | "None")
+        : undefined;
+  return serializeSetCookie(cookie.name, cookie.value, {
+    ...cookie,
+    expires: typeof cookie.expires === "number" ? new Date(cookie.expires) : cookie.expires,
+    sameSite,
+  });
 }
 
 // Re-export types
