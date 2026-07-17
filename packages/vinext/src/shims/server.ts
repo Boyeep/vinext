@@ -923,7 +923,7 @@ type CookieOptions = {
   expires?: Date | number;
   httpOnly?: boolean;
   secure?: boolean;
-  sameSite?: true | false | "strict" | "lax" | "none" | "Strict" | "Lax" | "None";
+  sameSite?: true | false | "strict" | "lax" | "none";
   partitioned?: boolean;
   priority?: "low" | "medium" | "high";
 };
