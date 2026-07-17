@@ -834,16 +834,9 @@ export class ResponseCookies {
     const [name, value, opts] = parseCookieSetArgs(args);
     validateCookieName(name);
 
-    const sameSite =
-      opts?.sameSite === true
-        ? "Strict"
-        : typeof opts?.sameSite === "string"
-          ? ((opts.sameSite[0].toUpperCase() + opts.sameSite.slice(1)) as "Strict" | "Lax" | "None")
-          : undefined;
     const serialized = serializeSetCookie(name, value, {
       ...opts,
       expires: typeof opts?.expires === "number" ? new Date(opts.expires) : opts?.expires,
-      sameSite,
     });
     this._parsed.set(name, { serialized, entry: { name, value } });
     this._syncHeaders();

@@ -20,7 +20,7 @@ type SerializeSetCookieOptions = {
   expires?: Date;
   httpOnly?: boolean;
   secure?: boolean;
-  sameSite?: "Strict" | "Lax" | "None";
+  sameSite?: true | false | "strict" | "lax" | "none" | "Strict" | "Lax" | "None";
   partitioned?: boolean;
   priority?: "low" | "medium" | "high";
 };
@@ -57,33 +57,32 @@ function validateCookieAttributeValue(value: string, attributeName: string): voi
  * - Encodes the value with `encodeURIComponent`.
  * - Defaults `Path` to `/` (matching @edge-runtime/cookies and Next.js).
  * - Validates path/domain to reject control characters and semicolons.
- * - Emits attributes in the order: Path, Domain, Max-Age, Expires, HttpOnly,
- *   Secure, SameSite, Partitioned, Priority.
+ * - Emits attributes in the same order and casing as Next.js's compiled
+ *   `@edge-runtime/cookies` serializer: Path, Expires, Max-Age, Domain,
+ *   Secure, HttpOnly, SameSite, Partitioned, Priority.
  *
  * The caller is responsible for validating the cookie name (typically before
  * mutating any internal state) via `validateCookieName`.
  */
 export function serializeSetCookie(
   name: string,
-  value: string,
+  value: string | null | undefined,
   options?: SerializeSetCookieOptions,
 ): string {
-  const parts = [`${name}=${encodeURIComponent(value)}`];
+  const parts = [`${name}=${encodeURIComponent(value ?? "")}`];
   const path = options?.path ?? "/";
   validateCookieAttributeValue(path, "Path");
-  parts.push(`Path=${path}`);
+  if (path) parts.push(`Path=${path}`);
+  if (options?.expires) parts.push(`Expires=${options.expires.toUTCString()}`);
+  if (options?.maxAge !== undefined) parts.push(`Max-Age=${options.maxAge}`);
   if (options?.domain) {
     validateCookieAttributeValue(options.domain, "Domain");
     parts.push(`Domain=${options.domain}`);
   }
-  if (options?.maxAge !== undefined) parts.push(`Max-Age=${options.maxAge}`);
-  if (options?.expires) parts.push(`Expires=${options.expires.toUTCString()}`);
-  if (options?.httpOnly) parts.push("HttpOnly");
   if (options?.secure) parts.push("Secure");
+  if (options?.httpOnly) parts.push("HttpOnly");
   if (options?.sameSite) parts.push(`SameSite=${options.sameSite}`);
   if (options?.partitioned) parts.push("Partitioned");
-  if (options?.priority) {
-    parts.push(`Priority=${options.priority[0].toUpperCase()}${options.priority.slice(1)}`);
-  }
+  if (options?.priority) parts.push(`Priority=${options.priority}`);
   return parts.join("; ");
 }
