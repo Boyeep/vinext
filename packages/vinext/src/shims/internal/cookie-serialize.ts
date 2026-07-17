@@ -1,10 +1,10 @@
 /**
- * Shared Set-Cookie serialization for the next/headers and next/server shims.
+ * Set-Cookie serialization for the mutable next/headers shim.
  *
- * Two call sites — `cookies().set()` in headers.ts and `ResponseCookies.set()`
- * in server.ts — produce identical Set-Cookie header strings. Keep the
- * encoding, attribute order, and validation in one place so subtle RFC 6265
- * details (escaping, attribute ordering, etc.) cannot drift between them.
+ * `ResponseCookies` in server.ts deliberately uses the exact
+ * @edge-runtime/cookies serialization order and casing instead. It also has to
+ * preserve the absence of a default path when parsing an existing Set-Cookie
+ * header, while this helper always defaults new mutable cookies to `Path=/`.
  *
  * Note: this is a value-encoding helper for response cookies only. The
  * request `Cookie:` header serialization in `RequestCookies._serialize`
@@ -42,7 +42,7 @@ export function validateCookieName(name: string): void {
  * Validate cookie attribute values (path, domain) to prevent injection
  * via semicolons, newlines, or other control characters.
  */
-function validateCookieAttributeValue(value: string, attributeName: string): void {
+export function validateCookieAttributeValue(value: string, attributeName: string): void {
   for (let i = 0; i < value.length; i++) {
     const code = value.charCodeAt(i);
     if (code <= 0x1f || code === 0x7f || value[i] === ";") {
