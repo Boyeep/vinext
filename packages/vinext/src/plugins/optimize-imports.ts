@@ -59,6 +59,31 @@ type DeclarationNode = {
   declarations?: Array<{ id: { name: string } }>;
 };
 
+const RELATIVE_MODULE_SUFFIXES = [
+  "",
+  ".js",
+  ".mjs",
+  ".cjs",
+  ".ts",
+  ".tsx",
+  ".jsx",
+  ".mts",
+  ".cts",
+  "/index.js",
+  "/index.mjs",
+  "/index.cjs",
+  "/index.ts",
+  "/index.tsx",
+  "/index.jsx",
+  "/index.mts",
+  "/index.cts",
+] as const;
+
+function relativeModuleCandidates(fileDir: string, source: string): string[] {
+  const base = path.join(fileDir, source);
+  return RELATIVE_MODULE_SUFFIXES.map((suffix) => `${base}${suffix}`);
+}
+
 /** Caches used by the optimize-imports plugin, scoped to a plugin instance. */
 type BarrelCaches = {
   /** Barrel export maps keyed by resolved entry file path. */
@@ -384,8 +409,15 @@ async function buildExportMapFromFile(
    * entries in the export map always store absolute paths for file references.
    * Bare package specifiers (e.g. "@radix-ui/react-slot") are returned unchanged.
    */
-  function normalizeSource(source: string): string {
-    return source.startsWith(".") ? path.join(fileDir, source) : source;
+  async function normalizeSource(source: string): Promise<string> {
+    if (!source.startsWith(".")) return source;
+    const candidates = relativeModuleCandidates(fileDir, source);
+    for (const candidate of candidates) {
+      if ((await readFile(candidate)) !== null) return candidate;
+    }
+    // Preserve the previous Vite-resolved fallback when the target cannot be
+    // inspected (for example, a generated module that does not exist yet).
+    return candidates[0];
   }
 
   function recordLocalDeclaration(node: DeclarationNode | null | undefined): void {
@@ -408,7 +440,7 @@ async function buildExportMapFromFile(
       case "ImportDeclaration": {
         const rawSource = typeof node.source?.value === "string" ? node.source.value : null;
         if (!rawSource) break;
-        const source = normalizeSource(rawSource);
+        const source = await normalizeSource(rawSource);
         for (const spec of node.specifiers ?? []) {
           switch (spec.type) {
             case "ImportNamespaceSpecifier":
@@ -458,37 +490,12 @@ async function buildExportMapFromFile(
           // export * as Name from "sub-pkg" — namespace re-export
           const name = getAstName(node.exported);
           if (name !== null) {
-            exportMap.set(name, { source: normalizeSource(rawSource), isNamespace: true });
+            exportMap.set(name, { source: await normalizeSource(rawSource), isNamespace: true });
           }
         } else {
           // export * from "./sub" — wildcard: recursively merge sub-module exports
           if (rawSource.startsWith(".")) {
-            const subPath = path.join(fileDir, rawSource);
-            // Try with the path as-is first, then with common extensions.
-            // Includes TypeScript-first (.ts/.tsx/.cts/.mts) and JSX (.jsx) extensions
-            // for TypeScript-first internal libraries and monorepo packages that may
-            // not compile to .js. Also includes .cjs for CommonJS-style re-export files.
-            const candidates = [
-              subPath,
-              `${subPath}.js`,
-              `${subPath}.mjs`,
-              `${subPath}.cjs`,
-              `${subPath}.ts`,
-              `${subPath}.tsx`,
-              `${subPath}.jsx`,
-              `${subPath}.mts`,
-              `${subPath}.cts`,
-              // Directory-style sub-modules: `export * from "./components"` where
-              // `components/` is a directory with an index file.
-              `${subPath}/index.js`,
-              `${subPath}/index.mjs`,
-              `${subPath}/index.cjs`,
-              `${subPath}/index.ts`,
-              `${subPath}/index.tsx`,
-              `${subPath}/index.jsx`,
-              `${subPath}/index.mts`,
-              `${subPath}/index.cts`,
-            ];
+            const candidates = relativeModuleCandidates(fileDir, rawSource);
             for (const candidate of candidates) {
               const candidateContent = await readFile(candidate);
               if (candidateContent !== null) {
@@ -518,7 +525,7 @@ async function buildExportMapFromFile(
       case "ExportNamedDeclaration": {
         const rawSource = typeof node.source?.value === "string" ? node.source.value : null;
         if (rawSource) {
-          const source = normalizeSource(rawSource);
+          const source = await normalizeSource(rawSource);
           // export { A, B } from "sub-pkg"
           for (const spec of node.specifiers ?? []) {
             if (spec.exported) {
@@ -885,13 +892,8 @@ export function createOptimizeImportsPlugin(
           for (const { local, imported } of specifiers) {
             const entry = exportMap.get(imported);
             if (!entry) continue;
-            // Sources in the export map are already absolute paths (for file references)
-            // or bare package specifiers — no further resolution needed.
-            // TODO: barrel sources without extensions (e.g. `"./chunk"`) produce
-            // extensionless absolute paths (e.g. `/node_modules/lodash-es/chunk`).
-            // Vite's resolver handles extension resolution on these paths, so this
-            // works in practice, but a future improvement would be to resolve the
-            // extension here (or verify via the barrel AST that the file exists).
+            // Sources in the export map are verified absolute file paths or bare
+            // package specifiers — no further resolution is needed here.
             const resolvedSource = entry.source;
             // Key on both resolved source and isNamespace: a named import and a
             // namespace import from the same sub-module must produce separate
