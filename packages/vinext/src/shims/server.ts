@@ -1246,7 +1246,16 @@ export function after<T>(task: Promise<T> | (() => T | Promise<T>)): void {
     return;
   }
 
-  if (requestContext.afterResponseClosed === true) {
+  const callbacks = requestContext.afterCallbacks as Array<() => unknown>;
+
+  // Callbacks registered by a callback that is currently draining belong to
+  // the same queue. Array iteration observes appended entries, so completion
+  // is not released until nested work settles. Once the drain has fully
+  // completed, later registrations run independently.
+  if (
+    requestContext.afterResponseClosed === true &&
+    requestContext.resolveAfterCompletion === null
+  ) {
     const guarded = Promise.resolve()
       .then(() => unifiedAls.run(requestContext, task))
       .catch((error) => {
@@ -1256,7 +1265,6 @@ export function after<T>(task: Promise<T> | (() => T | Promise<T>)): void {
     return;
   }
 
-  const callbacks = requestContext.afterCallbacks as Array<() => unknown>;
   callbacks.push(() => unifiedAls.run(requestContext, task));
 
   if (!requestContext.afterCompletion) {

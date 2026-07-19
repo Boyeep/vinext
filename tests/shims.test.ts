@@ -4926,6 +4926,49 @@ describe("next/server shim", () => {
     expect(called).toBe(true);
   });
 
+  // Ported from Next.js: packages/next/src/server/after/after-context.test.ts
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/after/after-context.test.ts
+  it("after() waits for callbacks added within another callback", async () => {
+    const { after } = await import("../packages/vinext/src/shims/server.js");
+    const { closeAfterResponseWithBody, createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+    let releaseNested!: () => void;
+    const nestedGate = new Promise<void>((resolve) => {
+      releaseNested = resolve;
+    });
+    let nestedStarted = false;
+    let nestedFinished = false;
+    const requestContext = createRequestContext();
+    let response!: Response;
+
+    await runWithRequestContext(requestContext, () => {
+      after(() => {
+        after(async () => {
+          nestedStarted = true;
+          await nestedGate;
+          nestedFinished = true;
+        });
+      });
+      response = closeAfterResponseWithBody(new Response("streamed"), requestContext);
+    });
+
+    await response.text();
+    await vi.waitFor(() => expect(nestedStarted).toBe(true));
+    expect(nestedFinished).toBe(false);
+
+    let completed = false;
+    void requestContext.afterCompletion?.then(() => {
+      completed = true;
+    });
+    await Promise.resolve();
+    expect(completed).toBe(false);
+
+    releaseNested();
+    await requestContext.afterCompletion;
+    expect(nestedFinished).toBe(true);
+    expect(completed).toBe(true);
+  });
+
   it("after() handles a promise argument", async () => {
     const { after } = await import("../packages/vinext/src/shims/server.js");
     const { createRequestContext, runWithRequestContext } =

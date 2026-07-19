@@ -145,8 +145,6 @@ describe("shouldEmitPagesClientTraceMetadata", () => {
   });
 });
 
-// Ported from Next.js: test/e2e/app-dir/next-after-pages/index.test.ts
-// https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/next-after-pages/index.test.ts
 describe("createPagesPageHandler — after() lifecycle", () => {
   it("runs callbacks only after the response body closes", async () => {
     let callbackRan = false;
