@@ -4905,19 +4905,31 @@ describe("next/server shim", () => {
     expect(human.isBot).toBe(false);
   });
 
-  it("after() runs a callback asynchronously without throwing", async () => {
+  it("after() waits for the response body to close before running a callback", async () => {
     const { after } = await import("../packages/vinext/src/shims/server.js");
+    const { closeAfterResponseWithBody, createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
     let called = false;
-    after(() => {
-      called = true;
+    const requestContext = createRequestContext();
+    let response!: Response;
+    await runWithRequestContext(requestContext, () => {
+      after(() => {
+        called = true;
+      });
+      response = closeAfterResponseWithBody(new Response("streamed"), requestContext);
     });
-    // after() schedules as a microtask, so await a tick
-    await new Promise((r) => setTimeout(r, 10));
+
+    await Promise.resolve();
+    expect(called).toBe(false);
+    await response.text();
+    await requestContext.afterCompletion;
     expect(called).toBe(true);
   });
 
   it("after() handles a promise argument", async () => {
     const { after } = await import("../packages/vinext/src/shims/server.js");
+    const { createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
     let resolved = false;
     const p = new Promise<void>((resolve) => {
       setTimeout(() => {
@@ -4925,21 +4937,23 @@ describe("next/server shim", () => {
         resolve();
       }, 5);
     });
-    after(p);
+    await runWithRequestContext(createRequestContext(), () => after(p));
     await new Promise((r) => setTimeout(r, 20));
     expect(resolved).toBe(true);
   });
 
   it("after() swallows errors from failing tasks", async () => {
     const { after } = await import("../packages/vinext/src/shims/server.js");
+    const { closeAfterResponse, createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    after(() => {
-      throw new Error("task failed");
+    const requestContext = createRequestContext();
+    await runWithRequestContext(requestContext, () => {
+      after(() => {
+        throw new Error("task failed");
+      });
     });
-    // after() wraps function tasks in Promise.resolve().then(task) — two microtask
-    // ticks are sufficient and more deterministic than a setTimeout.
-    await Promise.resolve();
-    await Promise.resolve();
+    await closeAfterResponse(requestContext);
     expect(consoleError).toHaveBeenCalledWith("[vinext] after() task failed:", expect.any(Error));
     consoleError.mockRestore();
   });
@@ -4970,19 +4984,10 @@ describe("next/server shim", () => {
     expect(called).toBe(true);
   });
 
-  it("after() falls back to fire-and-forget when no execution context exists", async () => {
+  it("after() throws outside a request or execution context", async () => {
     const { after } = await import("../packages/vinext/src/shims/server.js");
 
-    // Outside any execution context scope — should still run the task
-    let called = false;
-    after(() => {
-      called = true;
-    });
-    // after() wraps function tasks in Promise.resolve().then(task) — two microtask
-    // ticks are sufficient and more deterministic than a setTimeout.
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(called).toBe(true);
+    expect(() => after(() => {})).toThrow("outside a request scope");
   });
 
   it('after() throws inside "use cache" scope', async () => {

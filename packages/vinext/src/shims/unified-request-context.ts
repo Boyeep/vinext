@@ -45,6 +45,18 @@ export type UnifiedRequestContext = {
   /** Per-request cache for cacheForRequest(). Keyed by factory function reference. */
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   requestCache: WeakMap<(...args: any[]) => any, unknown>;
+
+  // ── next/server after() ───────────────────────────────────────────
+  /** Function callbacks deferred until the response body closes. */
+  afterCallbacks: Array<() => unknown>;
+  /** True once response completion has released deferred callbacks. */
+  afterResponseClosed: boolean;
+  /** True when eager promise work may register a nested callback later. */
+  afterPromiseScheduled: boolean;
+  /** Shared completion promise registered with the platform's waitUntil. */
+  afterCompletion: Promise<void> | null;
+  /** Resolves afterCompletion once all deferred callbacks settle. */
+  resolveAfterCompletion: (() => void) | null;
 } & VinextHeadersShimState &
   I18nState &
   NavigationState &
@@ -113,12 +125,83 @@ export function createRequestContext(opts?: Partial<UnifiedRequestContext>): Uni
     currentFetchDedupeEntries: new Map(),
     executionContext: _getInheritedExecutionContext(), // inherits from standalone ALS if present
     requestCache: new WeakMap(),
+    afterCallbacks: [],
+    afterResponseClosed: false,
+    afterPromiseScheduled: false,
+    afterCompletion: null,
+    resolveAfterCompletion: null,
     ssrContext: null,
     ssrHeadChildren: [],
     documentInitialHead: [],
     rootParams: null,
     ...opts,
   };
+}
+
+/**
+ * Release function-form `after()` work once the response body has closed.
+ * Callbacks run serially in registration order, matching Next.js' queue.
+ */
+export async function closeAfterResponse(ctx: UnifiedRequestContext): Promise<void> {
+  if (ctx.afterResponseClosed) return ctx.afterCompletion ?? Promise.resolve();
+  ctx.afterResponseClosed = true;
+
+  try {
+    for (const callback of ctx.afterCallbacks) {
+      try {
+        await callback();
+      } catch (error) {
+        console.error("[vinext] after() task failed:", error);
+      }
+    }
+  } finally {
+    ctx.afterCallbacks.length = 0;
+    ctx.resolveAfterCompletion?.();
+    ctx.resolveAfterCompletion = null;
+  }
+}
+
+/** Wrap a response so deferred callbacks start on stream completion or cancellation. */
+export function closeAfterResponseWithBody(
+  response: Response,
+  ctx: UnifiedRequestContext,
+): Response {
+  if (ctx.afterCallbacks.length === 0 && !ctx.afterPromiseScheduled) return response;
+  if (!response.body) {
+    queueMicrotask(() => void closeAfterResponse(ctx));
+    return response;
+  }
+
+  const reader = response.body.getReader();
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const result = await reader.read();
+        if (result.done) {
+          controller.close();
+          void closeAfterResponse(ctx);
+        } else {
+          controller.enqueue(result.value);
+        }
+      } catch (error) {
+        controller.error(error);
+        void closeAfterResponse(ctx);
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        void closeAfterResponse(ctx);
+      }
+    },
+  });
+
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
 }
 
 /**

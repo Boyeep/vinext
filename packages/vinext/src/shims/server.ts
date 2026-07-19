@@ -1210,29 +1210,64 @@ export type UserAgent = {
 export function after<T>(task: Promise<T> | (() => T | Promise<T>)): void {
   _throwIfInsideCacheScope("after()");
 
-  const promise = typeof task === "function" ? Promise.resolve().then(task) : task;
-  // NOTE: vinext runs function tasks concurrently with response streaming (next microtask),
-  // whereas Next.js queues them to run strictly after the response is sent via onClose.
-  // This is a known simplification — function tasks here are not guaranteed to run
-  // after the response completes, only after the current synchronous execution.
-  //
-  // `.catch()` is attached synchronously in the same tick as `promise` is created, so
-  // there is no window where a pre-rejected `task` promise could trigger an
-  // `unhandledrejection` event before the handler is in place.
-  const guarded = promise.catch((err) => {
-    console.error("[vinext] after() task failed:", err);
-  });
+  const unifiedAls = _g[Symbol.for("vinext.unifiedRequestContext.als")] as
+    | {
+        getStore(): Record<string, unknown> | undefined;
+        run<T>(store: Record<string, unknown>, callback: () => T): T;
+      }
+    | undefined;
+  const requestContext = unifiedAls?.getStore();
 
-  // TODO: Next.js throws when after() is called outside a request context or when
-  // waitUntil is unavailable, preventing silent task loss. vinext falls back to
-  // fire-and-forget here, which is correct for the Node.js dev server (where
-  // getRequestExecutionContext() always returns null). On Workers, a misconfigured
-  // entry that omits runWithExecutionContext would silently drop tasks — consider
-  // a one-time console.warn on the fallback path, gated to production only (e.g.
-  // `process.env.NODE_ENV === 'production'` or `typeof caches !== 'undefined'` for
-  // a Workers runtime check) with a module-level `let _warned = false` guard so it
-  // fires at most once and doesn't spam the dev-server console.
-  getRequestExecutionContext()?.waitUntil(guarded);
+  if (!requestContext || !unifiedAls) {
+    const executionContext = getRequestExecutionContext();
+    if (executionContext) {
+      if (typeof task !== "function" && typeof (task as PromiseLike<T>).then !== "function") {
+        throw new TypeError("`after()`: Argument must be a promise or a function");
+      }
+      const promise = typeof task === "function" ? Promise.resolve().then(task) : task;
+      const guarded = Promise.resolve(promise).catch((error) => {
+        console.error("[vinext] after() task failed:", error);
+      });
+      executionContext.waitUntil(guarded);
+      return;
+    }
+    throw new Error("`after()` was called outside a request scope");
+  }
+
+  if (typeof task !== "function") {
+    if (typeof (task as PromiseLike<T>).then !== "function") {
+      throw new TypeError("`after()`: Argument must be a promise or a function");
+    }
+    const guarded = Promise.resolve(task).catch((error) => {
+      console.error("[vinext] after() task failed:", error);
+    });
+    requestContext.afterPromiseScheduled = true;
+    getRequestExecutionContext()?.waitUntil(guarded);
+    return;
+  }
+
+  if (requestContext.afterResponseClosed === true) {
+    const guarded = Promise.resolve()
+      .then(() => unifiedAls.run(requestContext, task))
+      .catch((error) => {
+        console.error("[vinext] after() task failed:", error);
+      });
+    getRequestExecutionContext()?.waitUntil(guarded);
+    return;
+  }
+
+  const callbacks = requestContext.afterCallbacks as Array<() => unknown>;
+  callbacks.push(() => unifiedAls.run(requestContext, task));
+
+  if (!requestContext.afterCompletion) {
+    let resolveCompletion!: () => void;
+    const completion = new Promise<void>((resolve) => {
+      resolveCompletion = resolve;
+    });
+    requestContext.afterCompletion = completion;
+    requestContext.resolveAfterCompletion = resolveCompletion;
+    getRequestExecutionContext()?.waitUntil(completion);
+  }
 }
 
 /**
