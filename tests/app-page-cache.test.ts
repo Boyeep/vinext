@@ -969,7 +969,7 @@ describe("app page cache helpers", () => {
     const debugCalls: Array<[string, string]> = [];
     const rscData = new TextEncoder().encode("flight").buffer;
 
-    const response = finalizeAppPageHtmlCacheResponse(
+    const response = await finalizeAppPageHtmlCacheResponse(
       new Response("<h1>fresh</h1>", {
         status: 201,
         headers: {
@@ -1018,7 +1018,7 @@ describe("app page cache helpers", () => {
     );
 
     expect(response.status).toBe(201);
-    expect(response.headers.get("Cache-Control")).toBe("no-store, must-revalidate");
+    expect(response.headers.get("Cache-Control")).toBe("s-maxage=60, stale-while-revalidate");
     expect(response.headers.get("X-Vinext-Cache")).toBe("MISS");
     await expect(response.text()).resolves.toBe("<h1>fresh</h1>");
     expect(pendingCacheWrites).toHaveLength(1);
@@ -1077,7 +1077,7 @@ describe("app page cache helpers", () => {
       },
     };
 
-    const response = finalizeAppPageHtmlCacheResponse(
+    const response = await finalizeAppPageHtmlCacheResponse(
       new Response("<h1>personalized</h1>", {
         headers: {
           "Content-Type": "text/html; charset=utf-8",
@@ -1107,7 +1107,7 @@ describe("app page cache helpers", () => {
     const debugCalls: Array<[string, string]> = [];
     const isrSet = vi.fn();
 
-    const response = finalizeAppPageHtmlCacheResponse(
+    const response = await finalizeAppPageHtmlCacheResponse(
       new Response("<h1>personalized</h1>", {
         headers: {
           "Content-Type": "text/html; charset=utf-8",

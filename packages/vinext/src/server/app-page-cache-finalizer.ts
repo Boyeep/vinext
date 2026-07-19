@@ -119,10 +119,10 @@ function resolveAppPageCacheWritePolicy(options: {
   return { expireSeconds, revalidateSeconds };
 }
 
-export function finalizeAppPageHtmlCacheResponse(
+export async function finalizeAppPageHtmlCacheResponse(
   response: Response,
   options: FinalizeAppPageHtmlCacheResponseOptions,
-): Response {
+): Promise<Response> {
   if (!response.body) {
     return response;
   }
@@ -135,12 +135,6 @@ export function finalizeAppPageHtmlCacheResponse(
     undefined,
     options.interceptionContext,
   );
-  const clientHeaders = new Headers(response.headers);
-  if (options.preserveClientResponseHeaders !== true) {
-    applyPendingDynamicCdnHeaders(clientHeaders, options.getPageTags(), {
-      omitCacheState: options.omitPendingDynamicCacheState === true,
-    });
-  }
 
   const cachePromise = (async () => {
     try {
@@ -151,7 +145,7 @@ export function finalizeAppPageHtmlCacheResponse(
         options.consumeDynamicUsage()
       ) {
         options.isrDebug?.("HTML cache write skipped (dynamic usage during render)", htmlKey);
-        return;
+        return false;
       }
 
       const cachePolicy = resolveAppPageCacheWritePolicy({
@@ -161,7 +155,7 @@ export function finalizeAppPageHtmlCacheResponse(
       });
       if (!cachePolicy) {
         options.isrDebug?.("HTML cache write skipped (no cache policy)", htmlKey);
-        return;
+        return false;
       }
 
       const pageTags = options.getPageTags();
@@ -208,12 +202,26 @@ export function finalizeAppPageHtmlCacheResponse(
 
       await Promise.all(writes);
       options.isrDebug?.("HTML cache written", htmlKey);
+      return true;
     } catch (cacheError) {
       console.error("[vinext] ISR cache write error:", cacheError);
+      return false;
     }
   })();
 
-  options.waitUntil?.(cachePromise);
+  options.waitUntil?.(cachePromise.then(() => undefined));
+
+  // Cacheable HTML can only be identified after the lazy RSC/SSR stream has
+  // finished and all dynamic API usage is known. Wait for that decision before
+  // exposing response headers: successful MISS responses keep their public ISR
+  // policy, while dynamically rendered or failed writes remain private.
+  const cacheWritten = await cachePromise;
+  const clientHeaders = new Headers(response.headers);
+  if (!cacheWritten && options.preserveClientResponseHeaders !== true) {
+    applyPendingDynamicCdnHeaders(clientHeaders, options.getPageTags(), {
+      omitCacheState: options.omitPendingDynamicCacheState === true,
+    });
+  }
 
   return new Response(streamForClient, {
     status: response.status,
