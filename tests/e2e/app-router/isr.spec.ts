@@ -4,9 +4,24 @@ function baseUrl(): string {
   return String(test.info().project.use.baseURL);
 }
 
+async function resetIsrPath(request: APIRequestContext, path: string): Promise<void> {
+  const response = await request.get(
+    `${baseUrl()}/api/revalidate-isr?path=${encodeURIComponent(path)}`,
+  );
+  expect(response.status()).toBe(200);
+}
+
 test.describe("App Router ISR", () => {
   // This suite runs against the dedicated app-router-isr-prod project because
   // ISR caching is intentionally disabled in development mode.
+
+  test.beforeEach(async ({ request }) => {
+    // The production server survives Playwright retries, so explicitly clear
+    // shared entries to keep MISS/HIT assertions independent and retry-safe.
+    for (const path of ["/isr-test", "/client-isr-test", "/revalidate-test"]) {
+      await resetIsrPath(request, path);
+    }
+  });
 
   test("first unproven render is private while populating the ISR cache", async ({ request }) => {
     const res = await request.get(`${baseUrl()}/isr-test`);
@@ -67,9 +82,13 @@ test.describe("App Router ISR", () => {
   });
 
   test("Cache-Control header includes s-maxage and stale-while-revalidate", async ({ request }) => {
-    const res = await request.get(`${baseUrl()}/isr-test`);
-    const cc = res.headers()["cache-control"];
+    const initial = await request.get(`${baseUrl()}/isr-test`);
+    expect(initial.headers()["cache-control"]).toContain("no-store");
 
+    const cached = await request.get(`${baseUrl()}/isr-test`);
+    const cc = cached.headers()["cache-control"];
+
+    expect(cached.headers()["x-vinext-cache"]).toBe("HIT");
     expect(cc).toBeDefined();
     expect(cc).toContain("s-maxage=1");
     expect(cc).toContain("stale-while-revalidate");
