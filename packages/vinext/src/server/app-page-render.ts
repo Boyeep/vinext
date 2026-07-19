@@ -1144,7 +1144,7 @@ export async function renderAppPageLifecycle(
       return isrResponse;
     }
 
-    return await finalizeAppPageHtmlCacheResponse(isrResponse, {
+    return finalizeAppPageHtmlCacheResponse(isrResponse, {
       capturedDynamicUsageBeforeContextCleanup() {
         return dynamicUsedBeforeContextCleanup;
       },

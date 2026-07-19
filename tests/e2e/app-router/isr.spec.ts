@@ -8,10 +8,12 @@ test.describe("App Router ISR", () => {
   // This suite runs against the dedicated app-router-isr-prod project because
   // ISR caching is intentionally disabled in development mode.
 
-  test("first request returns ISR page", async ({ request }) => {
+  test("first unproven render is private while populating the ISR cache", async ({ request }) => {
     const res = await request.get(`${baseUrl()}/isr-test`);
 
     expect(res.status()).toBe(200);
+    expect(res.headers()["x-vinext-cache"]).toBe("MISS");
+    expect(res.headers()["cache-control"]).toContain("no-store");
 
     const html = await res.text();
     expect(html).toContain("App Router ISR Test");
@@ -73,12 +75,18 @@ test.describe("App Router ISR", () => {
     expect(cc).toContain("stale-while-revalidate");
   });
 
-  test("queryless client page keeps ISR cache headers", async ({ request }) => {
-    const res = await request.get(`${baseUrl()}/client-isr-test`);
-    const cc = res.headers()["cache-control"];
+  test("queryless client page becomes publicly cacheable after its initial render", async ({
+    request,
+  }) => {
+    const initial = await request.get(`${baseUrl()}/client-isr-test`);
 
-    expect(res.status()).toBe(200);
-    expect(await res.text()).toContain("Client ISR page");
+    expect(initial.status()).toBe(200);
+    expect(await initial.text()).toContain("Client ISR page");
+    expect(initial.headers()["cache-control"]).toContain("no-store");
+
+    const cached = await request.get(`${baseUrl()}/client-isr-test`);
+    const cc = cached.headers()["cache-control"];
+    expect(cached.headers()["x-vinext-cache"]).toBe("HIT");
     expect(cc).toContain("s-maxage=1");
     expect(cc).toContain("stale-while-revalidate");
   });
@@ -105,11 +113,17 @@ test.describe("App Router ISR", () => {
     expect(Number(tsText)).toBeGreaterThan(0);
   });
 
-  test("existing revalidate-test page (60s TTL) has correct Cache-Control", async ({ request }) => {
+  test("existing revalidate-test page exposes its 60s policy after population", async ({
+    request,
+  }) => {
     // The revalidate-test fixture uses revalidate=60
-    const res = await request.get(`${baseUrl()}/revalidate-test`);
-    const cc = res.headers()["cache-control"];
+    const initial = await request.get(`${baseUrl()}/revalidate-test`);
+    expect(initial.headers()["cache-control"]).toContain("no-store");
 
+    const cached = await request.get(`${baseUrl()}/revalidate-test`);
+    const cc = cached.headers()["cache-control"];
+
+    expect(cached.headers()["x-vinext-cache"]).toBe("HIT");
     expect(cc).toBeDefined();
     expect(cc).toContain("s-maxage=60");
     expect(cc).toContain("stale-while-revalidate");
