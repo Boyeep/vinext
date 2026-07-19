@@ -59,29 +59,19 @@ type DeclarationNode = {
   declarations?: Array<{ id: { name: string } }>;
 };
 
-const RELATIVE_MODULE_SUFFIXES = [
-  "",
-  ".js",
-  ".mjs",
-  ".cjs",
-  ".ts",
-  ".tsx",
-  ".jsx",
-  ".mts",
-  ".cts",
-  "/index.js",
-  "/index.mjs",
-  "/index.cjs",
-  "/index.ts",
-  "/index.tsx",
-  "/index.jsx",
-  "/index.mts",
-  "/index.cts",
-] as const;
+const DEFAULT_RESOLVE_EXTENSIONS = [".mjs", ".js", ".mts", ".ts", ".jsx", ".tsx", ".json"];
 
-function relativeModuleCandidates(fileDir: string, source: string): string[] {
+function relativeModuleCandidates(
+  fileDir: string,
+  source: string,
+  extensions: readonly string[],
+): string[] {
   const base = path.join(fileDir, source);
-  return RELATIVE_MODULE_SUFFIXES.map((suffix) => `${base}${suffix}`);
+  return [
+    base,
+    ...extensions.map((extension) => `${base}${extension}`),
+    ...extensions.map((extension) => `${base}/index${extension}`),
+  ];
 }
 
 /** Caches used by the optimize-imports plugin, scoped to a plugin instance. */
@@ -374,6 +364,7 @@ async function buildExportMapFromFile(
   readFile: (filepath: string) => Promise<string | null>,
   cache: Map<string, BarrelExportMap>,
   visited: Set<string>,
+  extensions: readonly string[],
   initialContent?: string,
 ): Promise<BarrelExportMap> {
   // Guard against circular re-exports
@@ -411,7 +402,7 @@ async function buildExportMapFromFile(
    */
   async function normalizeSource(source: string): Promise<string> {
     if (!source.startsWith(".")) return source;
-    const candidates = relativeModuleCandidates(fileDir, source);
+    const candidates = relativeModuleCandidates(fileDir, source, extensions);
     for (const candidate of candidates) {
       if ((await readFile(candidate)) !== null) return candidate;
     }
@@ -495,7 +486,7 @@ async function buildExportMapFromFile(
         } else {
           // export * from "./sub" — wildcard: recursively merge sub-module exports
           if (rawSource.startsWith(".")) {
-            const candidates = relativeModuleCandidates(fileDir, rawSource);
+            const candidates = relativeModuleCandidates(fileDir, rawSource, extensions);
             for (const candidate of candidates) {
               const candidateContent = await readFile(candidate);
               if (candidateContent !== null) {
@@ -504,6 +495,7 @@ async function buildExportMapFromFile(
                   readFile,
                   cache,
                   visited,
+                  extensions,
                   candidateContent,
                 );
                 for (const [name, entry] of subMap) {
@@ -616,6 +608,7 @@ export async function buildBarrelExportMap(
   entryPath: string | null,
   readFile: (filepath: string) => Promise<string | null>,
   cache?: Map<string, BarrelExportMap>,
+  extensions: readonly string[] = DEFAULT_RESOLVE_EXTENSIONS,
 ): Promise<BarrelExportMap | null> {
   if (!entryPath) return null;
 
@@ -643,6 +636,7 @@ export async function buildBarrelExportMap(
     readFile,
     exportMapCache,
     visited,
+    extensions,
     content,
   );
 
@@ -668,6 +662,7 @@ export function createOptimizeImportsPlugin(
   // file that imports from the same barrel package.
   const entryPathCache = new Map<string, string | null>();
   let optimizedPackages: Set<string> = new Set();
+  let resolveExtensions: readonly string[] = DEFAULT_RESOLVE_EXTENSIONS;
   let hasOptimizedImportSource: (code: string) => boolean = () => false;
   // Tracks barrel entries whose sub-package origins have already been registered,
   // so repeated imports of the same barrel (across many files) don't redundantly
@@ -684,6 +679,10 @@ export function createOptimizeImportsPlugin(
     name: "vinext:optimize-imports",
     // No enforce — runs after JSX transform so parseAst gets plain JS.
     // The transform hook still rewrites imports before Vite resolves them.
+
+    configResolved(config) {
+      resolveExtensions = config.resolve.extensions;
+    },
 
     buildStart() {
       // Initialize eagerly (rather than lazily) so that nextConfig is fully
@@ -779,6 +778,7 @@ export function createOptimizeImportsPlugin(
             barrelEntry,
             readFileSafe,
             barrelCaches.exportMapCache,
+            resolveExtensions,
           );
           if (!exportMap || !barrelEntry) continue;
 

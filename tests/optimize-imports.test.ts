@@ -551,6 +551,7 @@ describe("vinext:optimize-imports transform", () => {
     packageName: string,
     barrelContents: string,
     packageFiles: Record<string, string> = {},
+    resolveExtensions?: string[],
   ): Promise<(code: string, id: string) => Promise<ReturnType<(...args: any[]) => any>>> {
     // Create tmp project with a fake package in node_modules.
     // The package name must be in DEFAULT_OPTIMIZE_PACKAGES (or configured via
@@ -580,6 +581,11 @@ describe("vinext:optimize-imports transform", () => {
       () => undefined,
       () => capturedRoot,
     ) as Plugin;
+
+    if (resolveExtensions) {
+      const configResolvedHook = unwrapHook(plugin.configResolved);
+      configResolvedHook?.call(plugin, { resolve: { extensions: resolveExtensions } });
+    }
 
     // Initialize optimizedPackages via buildStart
     const buildStartHook = unwrapHook((plugin as any).buildStart);
@@ -643,6 +649,33 @@ describe("vinext:optimize-imports transform", () => {
     const call = await setupTransform("date-fns", `export { Button } from "./button";`, {
       "button.js": `export const Button = "button";`,
     });
+    const result = await call(`import { Button } from "date-fns";`, "/app/page.tsx");
+
+    const buttonPath = path.posix.join(tmpDir, "node_modules", "date-fns", "button.js");
+    expect(result!.code).toContain(`import { Button } from ${JSON.stringify(buttonPath)}`);
+  });
+
+  it("uses Vite's default extension priority for extensionless re-exports", async () => {
+    const call = await setupTransform("date-fns", `export { Button } from "./button";`, {
+      "button.js": `export const Button = "js";`,
+      "button.mjs": `export const Button = "mjs";`,
+    });
+    const result = await call(`import { Button } from "date-fns";`, "/app/page.tsx");
+
+    const buttonPath = path.posix.join(tmpDir, "node_modules", "date-fns", "button.mjs");
+    expect(result!.code).toContain(`import { Button } from ${JSON.stringify(buttonPath)}`);
+  });
+
+  it("honors custom Vite extension priority for extensionless re-exports", async () => {
+    const call = await setupTransform(
+      "date-fns",
+      `export { Button } from "./button";`,
+      {
+        "button.js": `export const Button = "js";`,
+        "button.mjs": `export const Button = "mjs";`,
+      },
+      [".js", ".mjs"],
+    );
     const result = await call(`import { Button } from "date-fns";`, "/app/page.tsx");
 
     const buttonPath = path.posix.join(tmpDir, "node_modules", "date-fns", "button.js");
