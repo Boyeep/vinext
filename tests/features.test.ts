@@ -1133,12 +1133,12 @@ describe("detectLocaleFromHeaders", () => {
     expect(detectLocaleFromHeaders(fakeReq("de;q=0.9,fr;q=0.8"), i18nConfig)).toBe("de");
   });
 
-  it("detects locale via prefix match (en-US -> en)", () => {
-    expect(detectLocaleFromHeaders(fakeReq("en-US"), i18nConfig)).toBe("en");
+  it("does not truncate an unconfigured regional locale", () => {
+    expect(detectLocaleFromHeaders(fakeReq("en-US"), i18nConfig)).toBeNull();
   });
 
-  it("detects locale via prefix match (fr-FR -> fr)", () => {
-    expect(detectLocaleFromHeaders(fakeReq("fr-FR,en;q=0.5"), i18nConfig)).toBe("fr");
+  it("falls through an unconfigured regional locale to the next preference", () => {
+    expect(detectLocaleFromHeaders(fakeReq("fr-FR,en;q=0.5"), i18nConfig)).toBe("en");
   });
 
   it("returns null for unrecognized language", () => {
