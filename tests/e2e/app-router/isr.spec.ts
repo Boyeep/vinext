@@ -1,7 +1,11 @@
-import { test, expect, type APIRequestContext } from "@playwright/test";
+import { test, expect, type APIRequestContext, type APIResponse } from "@playwright/test";
 
 function baseUrl(): string {
-  return String(test.info().project.use.baseURL);
+  const url = test.info().project.use.baseURL;
+  if (!url) {
+    throw new Error("isr.spec.ts requires a Playwright project with a baseURL");
+  }
+  return url;
 }
 
 async function resetIsrPath(request: APIRequestContext, path: string): Promise<void> {
@@ -9,6 +13,28 @@ async function resetIsrPath(request: APIRequestContext, path: string): Promise<v
     `${baseUrl()}/api/revalidate-isr?path=${encodeURIComponent(path)}`,
   );
   expect(response.status()).toBe(200);
+}
+
+async function waitForCacheHit(request: APIRequestContext, path: string): Promise<APIResponse> {
+  let response: APIResponse | undefined;
+  await expect
+    .poll(
+      async () => {
+        response = await request.get(`${baseUrl()}${path}`);
+        return response.headers()["x-vinext-cache"];
+      },
+      {
+        message: `wait for ${path} to be written to the ISR cache`,
+        timeout: 5_000,
+        intervals: [50, 100, 250],
+      },
+    )
+    .toBe("HIT");
+
+  if (!response) {
+    throw new Error(`No response received while waiting for an ISR cache HIT for ${path}`);
+  }
+  return response;
 }
 
 test.describe("App Router ISR", () => {
@@ -41,7 +67,7 @@ test.describe("App Router ISR", () => {
     const ts1 = html1.match(/data-testid="timestamp">(\d+)</)?.[1];
     expect(ts1).toBeDefined();
 
-    const res2 = await request.get(`${baseUrl()}/isr-test`);
+    const res2 = await waitForCacheHit(request, "/isr-test");
     const html2 = await res2.text();
     const ts2 = html2.match(/data-testid="timestamp">(\d+)</)?.[1];
 
@@ -51,8 +77,9 @@ test.describe("App Router ISR", () => {
   });
 
   test("request after TTL expires returns STALE with same cached content", async ({ request }) => {
-    const res1 = await request.get(`${baseUrl()}/isr-test`);
-    const html1 = await res1.text();
+    await request.get(`${baseUrl()}/isr-test`);
+    const cachedRes = await waitForCacheHit(request, "/isr-test");
+    const html1 = await cachedRes.text();
     const ts1 = html1.match(/data-testid="timestamp">(\d+)</)?.[1];
     expect(ts1).toBeDefined();
 
@@ -69,15 +96,14 @@ test.describe("App Router ISR", () => {
 
   test("after STALE triggers regen, subsequent request is HIT", async ({ request }) => {
     await request.get(`${baseUrl()}/isr-test`);
+    await waitForCacheHit(request, "/isr-test");
 
     await new Promise((r) => setTimeout(r, 1500));
 
     const staleRes = await request.get(`${baseUrl()}/isr-test`);
     expect(staleRes.headers()["x-vinext-cache"]).toBe("STALE");
 
-    await new Promise((r) => setTimeout(r, 500));
-
-    const hitRes = await request.get(`${baseUrl()}/isr-test`);
+    const hitRes = await waitForCacheHit(request, "/isr-test");
     expect(hitRes.headers()["x-vinext-cache"]).toBe("HIT");
   });
 
@@ -85,7 +111,7 @@ test.describe("App Router ISR", () => {
     const initial = await request.get(`${baseUrl()}/isr-test`);
     expect(initial.headers()["cache-control"]).toContain("no-store");
 
-    const cached = await request.get(`${baseUrl()}/isr-test`);
+    const cached = await waitForCacheHit(request, "/isr-test");
     const cc = cached.headers()["cache-control"];
 
     expect(cached.headers()["x-vinext-cache"]).toBe("HIT");
@@ -103,7 +129,7 @@ test.describe("App Router ISR", () => {
     expect(await initial.text()).toContain("Client ISR page");
     expect(initial.headers()["cache-control"]).toContain("no-store");
 
-    const cached = await request.get(`${baseUrl()}/client-isr-test`);
+    const cached = await waitForCacheHit(request, "/client-isr-test");
     const cc = cached.headers()["cache-control"];
     expect(cached.headers()["x-vinext-cache"]).toBe("HIT");
     expect(cc).toContain("s-maxage=1");
@@ -139,7 +165,7 @@ test.describe("App Router ISR", () => {
     const initial = await request.get(`${baseUrl()}/revalidate-test`);
     expect(initial.headers()["cache-control"]).toContain("no-store");
 
-    const cached = await request.get(`${baseUrl()}/revalidate-test`);
+    const cached = await waitForCacheHit(request, "/revalidate-test");
     const cc = cached.headers()["cache-control"];
 
     expect(cached.headers()["x-vinext-cache"]).toBe("HIT");
@@ -247,6 +273,12 @@ test.describe("ISR dynamicParams cache headers", () => {
  * They also verify nested pages sharing the same tag are also invalidated.
  */
 test.describe("revalidateTag / revalidatePath lifecycle (OpenNext compat)", () => {
+  test.beforeEach(async ({ request }) => {
+    for (const path of ["/revalidate-tag-test", "/revalidate-tag-test/nested"]) {
+      await resetIsrPath(request, path);
+    }
+  });
+
   test("revalidateTag invalidates cached page and regenerates", async ({ request }) => {
     // Ref: opennextjs-cloudflare revalidateTag.test.ts "Revalidate tag"
     test.setTimeout(30_000);
@@ -265,17 +297,14 @@ test.describe("revalidateTag / revalidatePath lifecycle (OpenNext compat)", () =
     expect(reqId1).toBeDefined();
 
     // Load again to confirm it's cached (same request ID)
-    const res2 = await request.get(`${baseUrl()}/revalidate-tag-test`);
+    const res2 = await waitForCacheHit(request, "/revalidate-tag-test");
     const html2 = await res2.text();
     // lgtm[js/redos] — applied to trusted SSR output, not user input
     const reqId2 =
       html2.match(
         /data-testid="request-id"[^>]*>(?:<!--.*?-->)*RequestID:\s*(?:<!--.*?-->)*([a-z0-9]+)/,
       )?.[1] ?? html2.match(/request-id[^>]*>[^<]*?([a-z0-9]{6,})/)?.[1];
-    const cacheHeader = res2.headers()["x-vinext-cache"];
-    if (cacheHeader) {
-      expect(["HIT", "STALE"]).toContain(cacheHeader);
-    }
+    expect(res2.headers()["x-vinext-cache"]).toBe("HIT");
     expect(reqId2).toBe(reqId1);
 
     // Call revalidateTag API
@@ -297,10 +326,7 @@ test.describe("revalidateTag / revalidatePath lifecycle (OpenNext compat)", () =
     expect(reqId3).not.toBe(reqId1);
 
     // Cache header should be MISS after invalidation
-    const cacheHeader3 = res3.headers()["x-vinext-cache"];
-    if (cacheHeader3) {
-      expect(cacheHeader3).toBe("MISS");
-    }
+    expect(res3.headers()["x-vinext-cache"]).toBe("MISS");
   });
 
   test("revalidatePath invalidates specific path", async ({ request }) => {
@@ -351,11 +377,8 @@ test.describe("revalidateTag / revalidatePath lifecycle (OpenNext compat)", () =
     await request.get(`${baseUrl()}/revalidate-tag-test`);
 
     // Second request — should be HIT now
-    const hitRes = await request.get(`${baseUrl()}/revalidate-tag-test`);
-    const cacheHeader = hitRes.headers()["x-vinext-cache"];
-    if (cacheHeader) {
-      expect(cacheHeader).toBe("HIT");
-    }
+    const hitRes = await waitForCacheHit(request, "/revalidate-tag-test");
+    expect(hitRes.headers()["x-vinext-cache"]).toBe("HIT");
   });
 
   // Ref: opennextjs-cloudflare revalidateTag.test.ts — "nested page shares tag"
