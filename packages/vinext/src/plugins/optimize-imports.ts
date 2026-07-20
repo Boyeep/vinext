@@ -61,23 +61,23 @@ type DeclarationNode = {
 
 const DEFAULT_RESOLVE_EXTENSIONS = [".mjs", ".js", ".mts", ".ts", ".jsx", ".tsx", ".json"];
 
-function relativeModuleCandidates(
+function relativeModuleFileCandidates(
   fileDir: string,
   source: string,
   extensions: readonly string[],
 ): string[] {
   const base = path.join(fileDir, source);
-  return [
-    base,
-    ...extensions.map((extension) => `${base}${extension}`),
-    ...extensions.map((extension) => `${base}/index${extension}`),
-  ];
+  return [base, ...extensions.map((extension) => `${base}${extension}`)];
+}
+
+function relativeModuleIndexCandidates(base: string, extensions: readonly string[]): string[] {
+  return extensions.map((extension) => `${base}/index${extension}`);
 }
 
 /** Caches used by the optimize-imports plugin, scoped to a plugin instance. */
 type BarrelCaches = {
-  /** Barrel export maps keyed by resolved entry file path. */
-  exportMapCache: Map<string, BarrelExportMap>;
+  /** Barrel export maps keyed first by Vite environment, then by resolved file path. */
+  exportMapCache: Map<string, Map<string, BarrelExportMap>>;
   /**
    * Maps sub-package specifiers to the barrel entry path they were derived from,
    * keyed by environment name ("rsc" | "ssr") so that divergent RSC/SSR barrel
@@ -407,13 +407,24 @@ async function buildExportMapFromFile(
    */
   async function normalizeSource(source: string): Promise<string> {
     if (!source.startsWith(".")) return source;
-    const candidates = relativeModuleCandidates(fileDir, source, extensions);
-    for (const candidate of candidates) {
+    const [base, ...extensionCandidates] = relativeModuleFileCandidates(
+      fileDir,
+      source,
+      extensions,
+    );
+    for (const candidate of [base, ...extensionCandidates]) {
+      if ((await readFile(candidate)) !== null) return candidate;
+    }
+    // Vite resolves a directory package entry before falling back to index files.
+    // Keep the directory specifier intact so Vite can apply exports/mainFields and
+    // the current environment's conditions instead of incorrectly selecting index.
+    if ((await readFile(`${base}/package.json`)) !== null) return base;
+    for (const candidate of relativeModuleIndexCandidates(base, extensions)) {
       if ((await readFile(candidate)) !== null) return candidate;
     }
     // Preserve the previous Vite-resolved fallback when the target cannot be
     // inspected (for example, a generated module that does not exist yet).
-    return candidates[0];
+    return base;
   }
 
   function recordLocalDeclaration(node: DeclarationNode | null | undefined): void {
@@ -491,7 +502,17 @@ async function buildExportMapFromFile(
         } else {
           // export * from "./sub" — wildcard: recursively merge sub-module exports
           if (rawSource.startsWith(".")) {
-            const candidates = relativeModuleCandidates(fileDir, rawSource, extensions);
+            const [base, ...extensionCandidates] = relativeModuleFileCandidates(
+              fileDir,
+              rawSource,
+              extensions,
+            );
+            const hasPackageEntry = (await readFile(`${base}/package.json`)) !== null;
+            const candidates = [
+              base,
+              ...extensionCandidates,
+              ...(hasPackageEntry ? [] : relativeModuleIndexCandidates(base, extensions)),
+            ];
             for (const candidate of candidates) {
               const candidateContent = await readFile(candidate);
               if (candidateContent !== null) {
@@ -659,7 +680,7 @@ export function createOptimizeImportsPlugin(
   getRoot: () => string,
 ): Plugin {
   const barrelCaches: BarrelCaches = {
-    exportMapCache: new Map<string, BarrelExportMap>(),
+    exportMapCache: new Map<string, Map<string, BarrelExportMap>>(),
     subpkgOrigin: new Map<string, Map<string, string>>(),
   };
   // Cache resolved entry paths — resolvePackageEntry does require.resolve, file I/O,
@@ -775,10 +796,16 @@ export function createOptimizeImportsPlugin(
             barrelEntry = await resolvePackageEntry(importSource, root, preferReactServer);
             entryPathCache.set(cacheKey, barrelEntry ?? null);
           }
+          const exportMapCacheKey = env?.name ?? "ssr";
+          let exportMapCache = barrelCaches.exportMapCache.get(exportMapCacheKey);
+          if (!exportMapCache) {
+            exportMapCache = new Map<string, BarrelExportMap>();
+            barrelCaches.exportMapCache.set(exportMapCacheKey, exportMapCache);
+          }
           const exportMap = await buildBarrelExportMap(
             barrelEntry,
             readFileSafe,
-            barrelCaches.exportMapCache,
+            exportMapCache,
             resolveExtensions,
           );
           if (!exportMap || !barrelEntry) continue;
