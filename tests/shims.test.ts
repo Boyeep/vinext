@@ -10606,6 +10606,22 @@ describe("NextURL basePath and locale properties", () => {
     expect(cloned.basePath).toBe("");
   });
 
+  it("clone retains the configured basePath for later href assignments", async () => {
+    // Next.js keeps the original constructor options in clone():
+    // packages/next/src/server/web/next-url.ts
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/web/next-url.ts
+    const { NextURL } = await import("../packages/vinext/src/shims/server.js");
+    const url = new NextURL("http://localhost/dashboard", undefined, {
+      basePath: "/docs",
+    });
+    const cloned = url.clone();
+
+    expect(cloned.basePath).toBe("");
+    cloned.href = "http://localhost/docs/settings";
+    expect(cloned.basePath).toBe("/docs");
+    expect(cloned.pathname).toBe("/settings");
+  });
+
   it("basePath is preserved through clone() when URL has the prefix", async () => {
     const { NextURL } = await import("../packages/vinext/src/shims/server.js");
     const url = new NextURL("http://localhost/docs/page", undefined, {

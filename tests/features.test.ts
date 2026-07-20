@@ -1103,12 +1103,12 @@ describe("detectLocaleFromHeaders", () => {
     expect(detectLocaleFromHeaders(fakeReq("de;q=0.9,fr;q=0.8"), i18nConfig)).toBe("de");
   });
 
-  it("detects locale via prefix match (en-US -> en)", () => {
-    expect(detectLocaleFromHeaders(fakeReq("en-US"), i18nConfig)).toBe("en");
+  it("does not truncate an unconfigured regional locale", () => {
+    expect(detectLocaleFromHeaders(fakeReq("en-US"), i18nConfig)).toBeNull();
   });
 
-  it("detects locale via prefix match (fr-FR -> fr)", () => {
-    expect(detectLocaleFromHeaders(fakeReq("fr-FR,en;q=0.5"), i18nConfig)).toBe("fr");
+  it("falls through an unconfigured regional locale to the next preference", () => {
+    expect(detectLocaleFromHeaders(fakeReq("fr-FR,en;q=0.5"), i18nConfig)).toBe("en");
   });
 
   it("returns null for unrecognized language", () => {
@@ -3465,7 +3465,7 @@ describe("ViewportHead rendering", () => {
   it("renders default viewport with width=device-width and initial-scale=1", () => {
     const html = renderToStaticMarkup(
       React.createElement(ViewportHead, {
-        viewport: { width: "device-width", initialScale: 1 },
+        viewport: mergeViewport([{ width: "device-width", initialScale: 1 }]),
       }),
     );
     expect(html).toContain('name="viewport"');
@@ -3474,41 +3474,65 @@ describe("ViewportHead rendering", () => {
   });
 
   it("renders custom viewport with all options", () => {
+    // Ported from Next.js: packages/next/src/lib/metadata/resolve-metadata.test.ts
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/lib/metadata/resolve-metadata.test.ts
     const html = renderToStaticMarkup(
       React.createElement(ViewportHead, {
-        viewport: {
-          width: "device-width",
-          initialScale: 1,
-          maximumScale: 1,
-          userScalable: false,
-        },
+        viewport: mergeViewport([
+          {
+            width: "device-width",
+            height: "device-height",
+            initialScale: 1,
+            minimumScale: 0.5,
+            maximumScale: 1,
+            userScalable: false,
+            viewportFit: "cover",
+            interactiveWidget: "overlays-content",
+          },
+        ]),
       }),
     );
-    expect(html).toContain("width=device-width");
-    expect(html).toContain("initial-scale=1");
-    expect(html).toContain("maximum-scale=1");
-    expect(html).toContain("user-scalable=no");
+    expect(html).toContain(
+      'content="width=device-width, height=device-height, initial-scale=1, minimum-scale=0.5, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=overlays-content"',
+    );
   });
 
   it("renders theme-color meta tag", () => {
     const html = renderToStaticMarkup(
       React.createElement(ViewportHead, {
-        viewport: { themeColor: "#000000" },
+        viewport: mergeViewport([{ themeColor: "#000000" }]),
       }),
     );
     expect(html).toContain('name="theme-color"');
     expect(html).toContain('content="#000000"');
   });
 
+  it("renders a single theme-color descriptor with its media query", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ViewportHead, {
+        viewport: mergeViewport([
+          {
+            themeColor: { media: "(prefers-color-scheme: dark)", color: "#000000" },
+          },
+        ]),
+      }),
+    );
+    expect(html).toContain('name="theme-color"');
+    expect(html).toContain('content="#000000"');
+    expect(html).toContain('media="(prefers-color-scheme: dark)"');
+  });
+
   it("renders multiple theme-color entries with media queries", () => {
     const html = renderToStaticMarkup(
       React.createElement(ViewportHead, {
-        viewport: {
-          themeColor: [
-            { media: "(prefers-color-scheme: light)", color: "#fff" },
-            { media: "(prefers-color-scheme: dark)", color: "#000" },
-          ],
-        },
+        viewport: mergeViewport([
+          {
+            themeColor: [
+              { media: "(prefers-color-scheme: light)", color: "#fff" },
+              { media: "(prefers-color-scheme: dark)", color: "#000" },
+            ],
+          },
+        ]),
       }),
     );
     expect(html).toContain('content="#fff"');
@@ -3520,7 +3544,7 @@ describe("ViewportHead rendering", () => {
   it("renders color-scheme meta tag", () => {
     const html = renderToStaticMarkup(
       React.createElement(ViewportHead, {
-        viewport: { colorScheme: "dark" },
+        viewport: mergeViewport([{ colorScheme: "dark" }]),
       }),
     );
     expect(html).toContain('name="color-scheme"');
@@ -3532,7 +3556,7 @@ describe("ViewportHead rendering", () => {
     const result = mergeViewport([{ themeColor: "#000" }]);
     expect(result.width).toBe("device-width");
     expect(result.initialScale).toBe(1);
-    expect(result.themeColor).toBe("#000");
+    expect(result.themeColor).toEqual([{ color: "#000" }]);
   });
 
   it("mergeViewport allows overriding defaults", () => {
@@ -3551,7 +3575,14 @@ describe("ViewportHead rendering", () => {
     const result = mergeViewport([{ width: 800 }, { width: 1024, themeColor: "#fff" }]);
     expect(result.width).toBe(1024);
     expect(result.initialScale).toBe(1);
-    expect(result.themeColor).toBe("#fff");
+    expect(result.themeColor).toEqual([{ color: "#fff" }]);
+  });
+
+  it("preserves an undefined media field on a theme-color descriptor", () => {
+    // Next.js's resolveThemeColor copies the descriptor fields explicitly:
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/lib/metadata/resolvers/resolve-basics.ts
+    const result = mergeViewport([{ themeColor: { color: "#000" } }]);
+    expect(result.themeColor).toEqual([{ color: "#000", media: undefined }]);
   });
 
   it("renders viewport meta even when only themeColor is provided (defaults injected)", () => {
