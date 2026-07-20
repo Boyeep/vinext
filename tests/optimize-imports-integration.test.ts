@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createBuilder, createServer, type Plugin, type ViteDevServer } from "vite";
 import { afterEach, describe, expect, it } from "vite-plus/test";
+import { toSlash } from "pathslash";
 import vinext from "../packages/vinext/src/index.js";
 
 type BuiltHandler = (request: Request) => Promise<Response>;
@@ -13,10 +14,12 @@ function linkWorkspaceDependencies(root: string): void {
   const target = path.join(root, "node_modules");
   fs.mkdirSync(target, { recursive: true });
   for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+    if (entry.name === ".vite") continue;
+    const sourceEntry = path.join(source, entry.name);
     fs.symlinkSync(
-      path.join(source, entry.name),
+      sourceEntry,
       path.join(target, entry.name),
-      entry.isDirectory() ? "junction" : "file",
+      fs.statSync(sourceEntry).isDirectory() ? "junction" : "file",
     );
   }
 }
@@ -118,7 +121,7 @@ describe("optimizePackageImports extensionless re-exports", () => {
     expect(devHtml).toContain("extensionless-button-server");
     expect(devHtml).toContain("extensionless-button-client");
 
-    const extensionlessTarget = path.join(root, "node_modules", "custom-icons", "button");
+    const extensionlessTarget = toSlash(path.join(root, "node_modules", "custom-icons", "button"));
     expect(transformed.get("rsc:page.tsx")).toContain(extensionlessTarget);
     expect(transformed.get("ssr:client.tsx")).toContain(extensionlessTarget);
 
