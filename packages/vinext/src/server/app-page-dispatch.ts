@@ -22,7 +22,11 @@ import {
   setHeadersContext,
 } from "vinext/shims/headers";
 import { getRequestExecutionContext } from "vinext/shims/request-context";
-import { createRequestContext, runWithRequestContext } from "vinext/shims/unified-request-context";
+import {
+  closeAfterResponse,
+  createRequestContext,
+  runWithRequestContext,
+} from "vinext/shims/unified-request-context";
 import {
   ensureFetchPatch,
   type FetchCacheMode,
@@ -524,7 +528,7 @@ async function runAppPageRevalidationContext<
     unstableCacheRevalidation: "foreground",
   });
 
-  return runWithRequestContext(requestContext, async () => {
+  const revalidation = runWithRequestContext(requestContext, async () => {
     ensureFetchPatch();
     setRefreshStaleFetchesInForeground(process.env.VINEXT_PRERENDER === "1");
     setCurrentFetchSoftTags(buildAppPageTags(options.cleanPathname, [], options.routeSegments));
@@ -535,6 +539,11 @@ async function runAppPageRevalidationContext<
     });
     return await runWithFetchDedupe(renderFn);
   });
+  try {
+    return await revalidation;
+  } finally {
+    await closeAfterResponse(requestContext);
+  }
 }
 
 function toInterceptOptions(

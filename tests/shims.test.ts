@@ -4922,8 +4922,41 @@ describe("next/server shim", () => {
     await Promise.resolve();
     expect(called).toBe(false);
     await response.text();
-    await requestContext.afterCompletion;
+    await requestContext.afterContext.completion;
     expect(called).toBe(true);
+  });
+
+  // Ported from Next.js: packages/next/src/server/after/after-context.test.ts
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/after/after-context.test.ts
+  it("after() captures callbacks registered while the response is streaming", async () => {
+    const { after } = await import("../packages/vinext/src/shims/server.js");
+    const { closeAfterResponseWithBody, createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+    let releaseStream!: () => void;
+    const streamGate = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    let called = false;
+    const requestContext = createRequestContext();
+    let response!: Response;
+
+    await runWithRequestContext(requestContext, () => {
+      const body = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          await streamGate;
+          after(() => {
+            called = true;
+          });
+          controller.enqueue(new TextEncoder().encode("streamed"));
+          controller.close();
+        },
+      });
+      response = closeAfterResponseWithBody(new Response(body), requestContext);
+    });
+
+    releaseStream();
+    await response.text();
+    await vi.waitFor(() => expect(called).toBe(true));
   });
 
   // Ported from Next.js: packages/next/src/server/after/after-context.test.ts
@@ -4957,16 +4990,72 @@ describe("next/server shim", () => {
     expect(nestedFinished).toBe(false);
 
     let completed = false;
-    void requestContext.afterCompletion?.then(() => {
+    void requestContext.afterContext.completion?.then(() => {
       completed = true;
     });
     await Promise.resolve();
     expect(completed).toBe(false);
 
     releaseNested();
-    await requestContext.afterCompletion;
+    await requestContext.afterContext.completion;
     expect(nestedFinished).toBe(true);
     expect(completed).toBe(true);
+  });
+
+  // Next.js uses an unbounded PromiseQueue for after callbacks, so callbacks
+  // registered together start concurrently rather than blocking each other.
+  it("after() starts sibling callbacks concurrently", async () => {
+    const { after } = await import("../packages/vinext/src/shims/server.js");
+    const { closeAfterResponse, createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstStarted = false;
+    let secondStarted = false;
+    const requestContext = createRequestContext();
+
+    await runWithRequestContext(requestContext, () => {
+      after(async () => {
+        firstStarted = true;
+        await firstGate;
+      });
+      after(() => {
+        secondStarted = true;
+      });
+    });
+
+    const completion = closeAfterResponse(requestContext);
+    await vi.waitFor(() => {
+      expect(firstStarted).toBe(true);
+      expect(secondStarted).toBe(true);
+    });
+    releaseFirst();
+    await completion;
+  });
+
+  // Ported from Next.js: packages/next/src/server/after/after-context.test.ts
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/after/after-context.test.ts
+  it("after() preserves the AsyncLocalStorage context from registration", async () => {
+    const { AsyncLocalStorage } = await import("node:async_hooks");
+    const { after } = await import("../packages/vinext/src/shims/server.js");
+    const { closeAfterResponse, createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+    const storage = new AsyncLocalStorage<string>();
+    const requestContext = createRequestContext();
+    let observed: string | undefined;
+
+    await storage.run("registration-scope", () =>
+      runWithRequestContext(requestContext, () => {
+        after(() => {
+          observed = storage.getStore();
+        });
+      }),
+    );
+
+    await closeAfterResponse(requestContext);
+    expect(observed).toBe("registration-scope");
   });
 
   it("after() handles a promise argument", async () => {
@@ -5023,6 +5112,35 @@ describe("next/server shim", () => {
     // waitUntil is called synchronously — no microtask delay needed
     expect(waitUntilCalls).toHaveLength(1);
     // Await the guarded promise to verify the callback ran
+    await waitUntilCalls[0];
+    expect(called).toBe(true);
+  });
+
+  it("after() shares lifecycle state through nested unified scopes", async () => {
+    const { after } = await import("../packages/vinext/src/shims/server.js");
+    const { runWithExecutionContext } =
+      await import("../packages/vinext/src/shims/request-context.js");
+    const { closeAfterResponse, createRequestContext, runWithRequestContext } =
+      await import("../packages/vinext/src/shims/unified-request-context.js");
+    const waitUntilCalls: Promise<unknown>[] = [];
+    const executionContext = {
+      waitUntil(promise: Promise<unknown>) {
+        waitUntilCalls.push(promise);
+      },
+    };
+    const requestContext = createRequestContext();
+    let called = false;
+
+    await runWithRequestContext(requestContext, () =>
+      runWithExecutionContext(executionContext, () => {
+        after(() => {
+          called = true;
+        });
+      }),
+    );
+
+    expect(waitUntilCalls).toHaveLength(1);
+    await closeAfterResponse(requestContext);
     await waitUntilCalls[0];
     expect(called).toBe(true);
   });

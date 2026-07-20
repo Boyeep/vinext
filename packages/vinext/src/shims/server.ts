@@ -18,6 +18,12 @@ import { encodeMiddlewareRequestHeaders } from "../utils/middleware-request-head
 import { validateCookieAttributeValue, validateCookieName } from "./internal/cookie-serialize.js";
 import { parseEdgeRequestCookieHeader } from "../utils/parse-cookie.js";
 import { getRequestExecutionContext } from "./request-context.js";
+import {
+  bindRequestContextSnapshot,
+  getRequestContext,
+  isInsideUnifiedScope,
+  queueAfterCallback,
+} from "./unified-request-context.js";
 import { assertSafeNavigationUrl } from "./url-safety.js";
 import { hasBasePath, stripBasePath } from "../utils/base-path.js";
 
@@ -1201,8 +1207,7 @@ export type UserAgent = {
  *
  * Uses the platform's `waitUntil` (via the per-request ExecutionContext) when
  * available so the task survives past the response on Cloudflare Workers.
- * Falls back to a fire-and-forget microtask on runtimes without an execution
- * context (e.g. Node.js dev server).
+ * Node.js dev drains callbacks from its response finish/close lifecycle.
  *
  * Throws when called inside a cached scope — request-specific
  * side-effects must not leak into cached results.
@@ -1210,18 +1215,15 @@ export type UserAgent = {
 export function after<T>(task: Promise<T> | (() => T | Promise<T>)): void {
   _throwIfInsideCacheScope("after()");
 
-  const unifiedAls = _g[Symbol.for("vinext.unifiedRequestContext.als")] as
-    | {
-        getStore(): Record<string, unknown> | undefined;
-        run<T>(store: Record<string, unknown>, callback: () => T): T;
-      }
-    | undefined;
-  const requestContext = unifiedAls?.getStore();
+  const requestContext = isInsideUnifiedScope() ? getRequestContext() : null;
 
-  if (!requestContext || !unifiedAls) {
+  if (!requestContext) {
     const executionContext = getRequestExecutionContext();
     if (executionContext) {
-      if (typeof task !== "function" && typeof (task as PromiseLike<T>).then !== "function") {
+      if (
+        typeof task !== "function" &&
+        (task == null || typeof (task as PromiseLike<T>).then !== "function")
+      ) {
         throw new TypeError("`after()`: Argument must be a promise or a function");
       }
       const promise = typeof task === "function" ? Promise.resolve().then(task) : task;
@@ -1235,47 +1237,17 @@ export function after<T>(task: Promise<T> | (() => T | Promise<T>)): void {
   }
 
   if (typeof task !== "function") {
-    if (typeof (task as PromiseLike<T>).then !== "function") {
+    if (task == null || typeof (task as PromiseLike<T>).then !== "function") {
       throw new TypeError("`after()`: Argument must be a promise or a function");
     }
     const guarded = Promise.resolve(task).catch((error) => {
       console.error("[vinext] after() task failed:", error);
     });
-    requestContext.afterPromiseScheduled = true;
     getRequestExecutionContext()?.waitUntil(guarded);
     return;
   }
 
-  const callbacks = requestContext.afterCallbacks as Array<() => unknown>;
-
-  // Callbacks registered by a callback that is currently draining belong to
-  // the same queue. Array iteration observes appended entries, so completion
-  // is not released until nested work settles. Once the drain has fully
-  // completed, later registrations run independently.
-  if (
-    requestContext.afterResponseClosed === true &&
-    requestContext.resolveAfterCompletion === null
-  ) {
-    const guarded = Promise.resolve()
-      .then(() => unifiedAls.run(requestContext, task))
-      .catch((error) => {
-        console.error("[vinext] after() task failed:", error);
-      });
-    getRequestExecutionContext()?.waitUntil(guarded);
-    return;
-  }
-
-  callbacks.push(() => unifiedAls.run(requestContext, task));
-
-  if (!requestContext.afterCompletion) {
-    let resolveCompletion!: () => void;
-    const completion = new Promise<void>((resolve) => {
-      resolveCompletion = resolve;
-    });
-    requestContext.afterCompletion = completion;
-    requestContext.resolveAfterCompletion = resolveCompletion;
-    getRequestExecutionContext()?.waitUntil(completion);
-  }
+  queueAfterCallback(requestContext, bindRequestContextSnapshot(requestContext, task));
 }
 
 /**

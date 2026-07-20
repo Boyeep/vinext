@@ -33,7 +33,7 @@ import {
 } from "../packages/vinext/src/server/cache-proof.js";
 import { APP_RSC_RENDER_MODE_PREFETCH_DYNAMIC_SHELL } from "../packages/vinext/src/server/app-rsc-render-mode.js";
 import { makeThenableParams } from "../packages/vinext/src/shims/thenable-params.js";
-import { connection } from "../packages/vinext/src/shims/server.js";
+import { after, connection } from "../packages/vinext/src/shims/server.js";
 import type { AppPageMiddlewareContext } from "../packages/vinext/src/server/app-page-response.js";
 import type { ISRCacheEntry } from "../packages/vinext/src/server/isr-cache.js";
 import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
@@ -2647,10 +2647,14 @@ describe("app page dispatch", () => {
     let capturedWaitForAllReady: boolean | undefined;
     let capturedFallbackToErrorDocument: boolean | undefined;
     let capturedServeStreamingMetadata: boolean | undefined;
+    let afterRan = false;
     const isrSet = vi.fn(async () => {});
     const { options } = createDispatchOptions({
       buildPageElement: async (_route, _params, _opts, _searchParams, _layout, buildOptions) => {
         capturedServeStreamingMetadata = buildOptions?.serveStreamingMetadata;
+        after(() => {
+          afterRan = true;
+        });
         return React.createElement("main", null, "fresh");
       },
       cleanPathname: "/posts/hello",
@@ -2696,6 +2700,7 @@ describe("app page dispatch", () => {
     expect(capturedServeStreamingMetadata).toBe(false);
     expect(capturedFallbackToErrorDocument).toBeUndefined();
     expect(isrSet).toHaveBeenCalled();
+    expect(afterRan).toBe(true);
   });
 
   it.each(["page", "metadata"] as const)(

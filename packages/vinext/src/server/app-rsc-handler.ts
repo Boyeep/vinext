@@ -28,6 +28,7 @@ import {
 } from "vinext/shims/request-context";
 import { pickRootParams, setRootParams, type RootParams } from "vinext/shims/root-params";
 import {
+  closeAfterResponse,
   closeAfterResponseWithBody,
   createRequestContext,
   runWithRequestContext,
@@ -1399,7 +1400,7 @@ export function createAppRscHandler<TRoute extends AppRscHandlerRoute>(
       unstableCacheRevalidation: "background",
     });
 
-    const response = await runWithRequestContext(requestContext, () =>
+    const responsePromise = runWithRequestContext(requestContext, () =>
       runWithPrerenderWorkUnit(
         async () => {
           ensureFetchPatch();
@@ -1432,6 +1433,13 @@ export function createAppRscHandler<TRoute extends AppRscHandlerRoute>(
         { route: () => new URL(request.url).pathname },
       ),
     );
+    let response: Response;
+    try {
+      response = await responsePromise;
+    } catch (error) {
+      await closeAfterResponse(requestContext);
+      throw error;
+    }
     return closeAfterResponseWithBody(response, requestContext);
   };
 }
