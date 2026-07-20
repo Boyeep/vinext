@@ -582,11 +582,6 @@ describe("vinext:optimize-imports transform", () => {
       () => capturedRoot,
     ) as Plugin;
 
-    if (resolveExtensions) {
-      const configResolvedHook = unwrapHook(plugin.configResolved);
-      configResolvedHook?.call(plugin, { resolve: { extensions: resolveExtensions } });
-    }
-
     // Initialize optimizedPackages via buildStart
     const buildStartHook = unwrapHook((plugin as any).buildStart);
     if (buildStartHook) await buildStartHook.call(plugin);
@@ -594,7 +589,19 @@ describe("vinext:optimize-imports transform", () => {
     const transform = unwrapHook(plugin.transform)!;
     // Return a caller that fakes the environment context as RSC (server)
     return async (code: string, id: string) =>
-      await (transform as any).call({ ...plugin, environment: { name: "rsc" } }, code, id);
+      await (transform as any).call(
+        {
+          ...plugin,
+          environment: {
+            name: "rsc",
+            ...(resolveExtensions
+              ? { config: { resolve: { extensions: resolveExtensions } } }
+              : {}),
+          },
+        },
+        code,
+        id,
+      );
   }
 
   afterEach(() => {
@@ -666,7 +673,7 @@ describe("vinext:optimize-imports transform", () => {
     expect(result!.code).toContain(`import { Button } from ${JSON.stringify(buttonPath)}`);
   });
 
-  it("honors custom Vite extension priority for extensionless re-exports", async () => {
+  it("honors the current Vite environment's extension priority", async () => {
     const call = await setupTransform(
       "date-fns",
       `export { Button } from "./button";`,

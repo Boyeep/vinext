@@ -115,7 +115,12 @@ type AstBodyNode = {
 // Vite doesn't publicly type `this.environment` on plugin hooks yet.
 // This cast type is used consistently across resolveId and transform handlers
 // so that when Vite adds proper typing it can be removed in one place.
-type PluginCtx = { environment?: { name?: string } };
+type PluginCtx = {
+  environment?: {
+    name?: string;
+    config?: { resolve: { extensions: readonly string[] } };
+  };
+};
 
 /**
  * Packages whose barrel imports are automatically optimized.
@@ -662,7 +667,6 @@ export function createOptimizeImportsPlugin(
   // file that imports from the same barrel package.
   const entryPathCache = new Map<string, string | null>();
   let optimizedPackages: Set<string> = new Set();
-  let resolveExtensions: readonly string[] = DEFAULT_RESOLVE_EXTENSIONS;
   let hasOptimizedImportSource: (code: string) => boolean = () => false;
   // Tracks barrel entries whose sub-package origins have already been registered,
   // so repeated imports of the same barrel (across many files) don't redundantly
@@ -679,10 +683,6 @@ export function createOptimizeImportsPlugin(
     name: "vinext:optimize-imports",
     // No enforce — runs after JSX transform so parseAst gets plain JS.
     // The transform hook still rewrites imports before Vite resolves them.
-
-    configResolved(config) {
-      resolveExtensions = config.resolve.extensions;
-    },
 
     buildStart() {
       // Initialize eagerly (rather than lazily) so that nextConfig is fully
@@ -736,6 +736,7 @@ export function createOptimizeImportsPlugin(
         // dep optimizer which handles barrel imports correctly.
         const env = (this as PluginCtx).environment;
         if (env?.name === "client") return null;
+        const resolveExtensions = env?.config?.resolve.extensions ?? DEFAULT_RESOLVE_EXTENSIONS;
         // "react-server" export condition should only be preferred in the RSC environment.
         // SSR renders with the full React runtime and must NOT resolve react-server entries.
         const preferReactServer = env?.name === "rsc";
