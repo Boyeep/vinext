@@ -59,25 +59,10 @@ type DeclarationNode = {
   declarations?: Array<{ id: { name: string } }>;
 };
 
-const DEFAULT_RESOLVE_EXTENSIONS = [".mjs", ".js", ".mts", ".ts", ".jsx", ".tsx", ".json"];
-
-function relativeModuleFileCandidates(
-  fileDir: string,
-  source: string,
-  extensions: readonly string[],
-): string[] {
-  const base = path.join(fileDir, source);
-  return [base, ...extensions.map((extension) => `${base}${extension}`)];
-}
-
-function relativeModuleIndexCandidates(base: string, extensions: readonly string[]): string[] {
-  return extensions.map((extension) => `${base}/index${extension}`);
-}
-
 /** Caches used by the optimize-imports plugin, scoped to a plugin instance. */
 type BarrelCaches = {
-  /** Barrel export maps keyed first by Vite environment, then by resolved file path. */
-  exportMapCache: Map<string, Map<string, BarrelExportMap>>;
+  /** Barrel export maps keyed by resolved entry file path. */
+  exportMapCache: Map<string, BarrelExportMap>;
   /**
    * Maps sub-package specifiers to the barrel entry path they were derived from,
    * keyed by environment name ("rsc" | "ssr") so that divergent RSC/SSR barrel
@@ -115,12 +100,7 @@ type AstBodyNode = {
 // Vite doesn't publicly type `this.environment` on plugin hooks yet.
 // This cast type is used consistently across resolveId and transform handlers
 // so that when Vite adds proper typing it can be removed in one place.
-type PluginCtx = {
-  environment?: {
-    name?: string;
-    config?: { resolve: { extensions: readonly string[] } };
-  };
-};
+type PluginCtx = { environment?: { name?: string } };
 
 /**
  * Packages whose barrel imports are automatically optimized.
@@ -369,7 +349,6 @@ async function buildExportMapFromFile(
   readFile: (filepath: string) => Promise<string | null>,
   cache: Map<string, BarrelExportMap>,
   visited: Set<string>,
-  extensions: readonly string[],
   initialContent?: string,
 ): Promise<BarrelExportMap> {
   // Guard against circular re-exports
@@ -405,26 +384,8 @@ async function buildExportMapFromFile(
    * entries in the export map always store absolute paths for file references.
    * Bare package specifiers (e.g. "@radix-ui/react-slot") are returned unchanged.
    */
-  async function normalizeSource(source: string): Promise<string> {
-    if (!source.startsWith(".")) return source;
-    const [base, ...extensionCandidates] = relativeModuleFileCandidates(
-      fileDir,
-      source,
-      extensions,
-    );
-    for (const candidate of [base, ...extensionCandidates]) {
-      if ((await readFile(candidate)) !== null) return candidate;
-    }
-    // Vite resolves a directory package entry before falling back to index files.
-    // Keep the directory specifier intact so Vite can apply exports/mainFields and
-    // the current environment's conditions instead of incorrectly selecting index.
-    if ((await readFile(`${base}/package.json`)) !== null) return base;
-    for (const candidate of relativeModuleIndexCandidates(base, extensions)) {
-      if ((await readFile(candidate)) !== null) return candidate;
-    }
-    // Preserve the previous Vite-resolved fallback when the target cannot be
-    // inspected (for example, a generated module that does not exist yet).
-    return base;
+  function normalizeSource(source: string): string {
+    return source.startsWith(".") ? path.join(fileDir, source) : source;
   }
 
   function recordLocalDeclaration(node: DeclarationNode | null | undefined): void {
@@ -447,7 +408,7 @@ async function buildExportMapFromFile(
       case "ImportDeclaration": {
         const rawSource = typeof node.source?.value === "string" ? node.source.value : null;
         if (!rawSource) break;
-        const source = await normalizeSource(rawSource);
+        const source = normalizeSource(rawSource);
         for (const spec of node.specifiers ?? []) {
           switch (spec.type) {
             case "ImportNamespaceSpecifier":
@@ -497,21 +458,36 @@ async function buildExportMapFromFile(
           // export * as Name from "sub-pkg" — namespace re-export
           const name = getAstName(node.exported);
           if (name !== null) {
-            exportMap.set(name, { source: await normalizeSource(rawSource), isNamespace: true });
+            exportMap.set(name, { source: normalizeSource(rawSource), isNamespace: true });
           }
         } else {
           // export * from "./sub" — wildcard: recursively merge sub-module exports
           if (rawSource.startsWith(".")) {
-            const [base, ...extensionCandidates] = relativeModuleFileCandidates(
-              fileDir,
-              rawSource,
-              extensions,
-            );
-            const hasPackageEntry = (await readFile(`${base}/package.json`)) !== null;
+            const subPath = path.join(fileDir, rawSource);
+            // Try with the path as-is first, then with common extensions.
+            // Includes TypeScript-first (.ts/.tsx/.cts/.mts) and JSX (.jsx) extensions
+            // for TypeScript-first internal libraries and monorepo packages that may
+            // not compile to .js. Also includes .cjs for CommonJS-style re-export files.
             const candidates = [
-              base,
-              ...extensionCandidates,
-              ...(hasPackageEntry ? [] : relativeModuleIndexCandidates(base, extensions)),
+              subPath,
+              `${subPath}.js`,
+              `${subPath}.mjs`,
+              `${subPath}.cjs`,
+              `${subPath}.ts`,
+              `${subPath}.tsx`,
+              `${subPath}.jsx`,
+              `${subPath}.mts`,
+              `${subPath}.cts`,
+              // Directory-style sub-modules: `export * from "./components"` where
+              // `components/` is a directory with an index file.
+              `${subPath}/index.js`,
+              `${subPath}/index.mjs`,
+              `${subPath}/index.cjs`,
+              `${subPath}/index.ts`,
+              `${subPath}/index.tsx`,
+              `${subPath}/index.jsx`,
+              `${subPath}/index.mts`,
+              `${subPath}/index.cts`,
             ];
             for (const candidate of candidates) {
               const candidateContent = await readFile(candidate);
@@ -521,7 +497,6 @@ async function buildExportMapFromFile(
                   readFile,
                   cache,
                   visited,
-                  extensions,
                   candidateContent,
                 );
                 for (const [name, entry] of subMap) {
@@ -543,7 +518,7 @@ async function buildExportMapFromFile(
       case "ExportNamedDeclaration": {
         const rawSource = typeof node.source?.value === "string" ? node.source.value : null;
         if (rawSource) {
-          const source = await normalizeSource(rawSource);
+          const source = normalizeSource(rawSource);
           // export { A, B } from "sub-pkg"
           for (const spec of node.specifiers ?? []) {
             if (spec.exported) {
@@ -634,7 +609,6 @@ export async function buildBarrelExportMap(
   entryPath: string | null,
   readFile: (filepath: string) => Promise<string | null>,
   cache?: Map<string, BarrelExportMap>,
-  extensions: readonly string[] = DEFAULT_RESOLVE_EXTENSIONS,
 ): Promise<BarrelExportMap | null> {
   if (!entryPath) return null;
 
@@ -662,7 +636,6 @@ export async function buildBarrelExportMap(
     readFile,
     exportMapCache,
     visited,
-    extensions,
     content,
   );
 
@@ -680,7 +653,7 @@ export function createOptimizeImportsPlugin(
   getRoot: () => string,
 ): Plugin {
   const barrelCaches: BarrelCaches = {
-    exportMapCache: new Map<string, Map<string, BarrelExportMap>>(),
+    exportMapCache: new Map<string, BarrelExportMap>(),
     subpkgOrigin: new Map<string, Map<string, string>>(),
   };
   // Cache resolved entry paths — resolvePackageEntry does require.resolve, file I/O,
@@ -757,7 +730,6 @@ export function createOptimizeImportsPlugin(
         // dep optimizer which handles barrel imports correctly.
         const env = (this as PluginCtx).environment;
         if (env?.name === "client") return null;
-        const resolveExtensions = env?.config?.resolve.extensions ?? DEFAULT_RESOLVE_EXTENSIONS;
         // "react-server" export condition should only be preferred in the RSC environment.
         // SSR renders with the full React runtime and must NOT resolve react-server entries.
         const preferReactServer = env?.name === "rsc";
@@ -796,17 +768,10 @@ export function createOptimizeImportsPlugin(
             barrelEntry = await resolvePackageEntry(importSource, root, preferReactServer);
             entryPathCache.set(cacheKey, barrelEntry ?? null);
           }
-          const exportMapCacheKey = env?.name ?? "ssr";
-          let exportMapCache = barrelCaches.exportMapCache.get(exportMapCacheKey);
-          if (!exportMapCache) {
-            exportMapCache = new Map<string, BarrelExportMap>();
-            barrelCaches.exportMapCache.set(exportMapCacheKey, exportMapCache);
-          }
           const exportMap = await buildBarrelExportMap(
             barrelEntry,
             readFileSafe,
-            exportMapCache,
-            resolveExtensions,
+            barrelCaches.exportMapCache,
           );
           if (!exportMap || !barrelEntry) continue;
 
@@ -920,8 +885,13 @@ export function createOptimizeImportsPlugin(
           for (const { local, imported } of specifiers) {
             const entry = exportMap.get(imported);
             if (!entry) continue;
-            // Sources in the export map are verified absolute file paths or bare
-            // package specifiers — no further resolution is needed here.
+            // Sources in the export map are already absolute paths (for file references)
+            // or bare package specifiers — no further resolution needed.
+            // TODO: barrel sources without extensions (e.g. `"./chunk"`) produce
+            // extensionless absolute paths (e.g. `/node_modules/lodash-es/chunk`).
+            // Vite's resolver handles extension resolution on these paths, so this
+            // works in practice, but a future improvement would be to resolve the
+            // extension here (or verify via the barrel AST that the file exists).
             const resolvedSource = entry.source;
             // Key on both resolved source and isNamespace: a named import and a
             // namespace import from the same sub-module must produce separate

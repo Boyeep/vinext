@@ -174,7 +174,7 @@ describe("vinext:optimize-imports plugin", () => {
 
       expect(result).not.toBeNull();
       expect(result!.code).toContain(
-        `import { IconFoo } from "${path.posix.join(tmpDir, "node_modules", "custom-icons", "foo.js")}"`,
+        `import { IconFoo } from "${path.posix.join(tmpDir, "node_modules", "custom-icons", "foo")}"`,
       );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -408,7 +408,7 @@ export { Button } from "./button";`;
     const buttonEntry = map!.get("Button");
     expect(buttonEntry).toBeDefined();
     // Must resolve relative to components/, not to the barrel root
-    expect(buttonEntry!.source).toBe("/fake/nested/components/Button.js");
+    expect(buttonEntry!.source).toBe("/fake/nested/components/Button");
     expect(buttonEntry!.source).not.toBe("/fake/nested/Button");
   });
 
@@ -429,7 +429,7 @@ export { Button } from "./button";`;
     const buttonEntry = map!.get("Button");
     expect(buttonEntry).toBeDefined();
     // Must resolve through the directory index, relative to components/
-    expect(buttonEntry!.source).toBe("/fake/dir-wildcard/components/Button.js");
+    expect(buttonEntry!.source).toBe("/fake/dir-wildcard/components/Button");
   });
 
   it("resolves wildcard export * from './mod' where mod.jsx exists (jsx extension)", async () => {
@@ -550,15 +550,7 @@ describe("vinext:optimize-imports transform", () => {
   async function setupTransform(
     packageName: string,
     barrelContents: string,
-    packageFiles: Record<string, string> = {},
-    resolveExtensions?: string[],
-  ): Promise<
-    (
-      code: string,
-      id: string,
-      environment?: { name?: string; resolveExtensions?: string[] },
-    ) => Promise<ReturnType<(...args: any[]) => any>>
-  > {
+  ): Promise<(code: string, id: string) => Promise<ReturnType<(...args: any[]) => any>>> {
     // Create tmp project with a fake package in node_modules.
     // The package name must be in DEFAULT_OPTIMIZE_PACKAGES (or configured via
     // next.config.js) for the plugin's buildStart to include it.
@@ -576,11 +568,6 @@ describe("vinext:optimize-imports transform", () => {
       JSON.stringify({ name: packageName, type: "module", main: "./index.js" }),
     );
     fs.writeFileSync(path.join(pkgDir, "index.js"), barrelContents);
-    for (const [relativePath, contents] of Object.entries(packageFiles)) {
-      const filePath = path.join(pkgDir, relativePath);
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      fs.writeFileSync(filePath, contents);
-    }
 
     let capturedRoot = tmpDir;
     const plugin = createOptimizeImportsPlugin(
@@ -594,22 +581,8 @@ describe("vinext:optimize-imports transform", () => {
 
     const transform = unwrapHook(plugin.transform)!;
     // Return a caller that fakes the environment context as RSC (server)
-    return async (code: string, id: string, environment = {}) => {
-      const environmentResolveExtensions = environment.resolveExtensions ?? resolveExtensions;
-      return await (transform as any).call(
-        {
-          ...plugin,
-          environment: {
-            name: environment.name ?? "rsc",
-            ...(environmentResolveExtensions
-              ? { config: { resolve: { extensions: environmentResolveExtensions } } }
-              : {}),
-          },
-        },
-        code,
-        id,
-      );
-    };
+    return async (code: string, id: string) =>
+      await (transform as any).call({ ...plugin, environment: { name: "rsc" } }, code, id);
   }
 
   afterEach(() => {
@@ -658,101 +631,6 @@ describe("vinext:optimize-imports transform", () => {
     // Must NOT contain the raw relative path (that would resolve against user file)
     expect(result!.code).not.toContain(`from "./button"`);
     expect(result!.code).not.toContain(`from "./input"`);
-  });
-
-  it("resolves extensionless named re-exports to verified files", async () => {
-    const call = await setupTransform("date-fns", `export { Button } from "./button";`, {
-      "button.js": `export const Button = "button";`,
-    });
-    const result = await call(`import { Button } from "date-fns";`, "/app/page.tsx");
-
-    const buttonPath = path.posix.join(tmpDir, "node_modules", "date-fns", "button.js");
-    expect(result!.code).toContain(`import { Button } from ${JSON.stringify(buttonPath)}`);
-  });
-
-  it("uses Vite's default extension priority for extensionless re-exports", async () => {
-    const call = await setupTransform("date-fns", `export { Button } from "./button";`, {
-      "button.js": `export const Button = "js";`,
-      "button.mjs": `export const Button = "mjs";`,
-    });
-    const result = await call(`import { Button } from "date-fns";`, "/app/page.tsx");
-
-    const buttonPath = path.posix.join(tmpDir, "node_modules", "date-fns", "button.mjs");
-    expect(result!.code).toContain(`import { Button } from ${JSON.stringify(buttonPath)}`);
-  });
-
-  it("honors the current Vite environment's extension priority", async () => {
-    const call = await setupTransform(
-      "date-fns",
-      `export { Button } from "./button";`,
-      {
-        "button.js": `export const Button = "js";`,
-        "button.mjs": `export const Button = "mjs";`,
-      },
-      [".js", ".mjs"],
-    );
-    const result = await call(`import { Button } from "date-fns";`, "/app/page.tsx");
-
-    const buttonPath = path.posix.join(tmpDir, "node_modules", "date-fns", "button.js");
-    expect(result!.code).toContain(`import { Button } from ${JSON.stringify(buttonPath)}`);
-  });
-
-  it("does not share extension resolution results across Vite environments", async () => {
-    const call = await setupTransform("date-fns", `export { Button } from "./button";`, {
-      "button.js": `export const Button = "js";`,
-      "button.mjs": `export const Button = "mjs";`,
-    });
-
-    const rscResult = await call(`import { Button } from "date-fns";`, "/app/rsc.tsx", {
-      name: "rsc",
-      resolveExtensions: [".mjs", ".js"],
-    });
-    const ssrResult = await call(`import { Button } from "date-fns";`, "/app/ssr.tsx", {
-      name: "ssr",
-      resolveExtensions: [".js", ".mjs"],
-    });
-
-    const packageDir = path.posix.join(tmpDir, "node_modules", "date-fns");
-    expect(rscResult!.code).toContain(
-      `import { Button } from ${JSON.stringify(`${packageDir}/button.mjs`)}`,
-    );
-    expect(ssrResult!.code).toContain(
-      `import { Button } from ${JSON.stringify(`${packageDir}/button.js`)}`,
-    );
-  });
-
-  it("resolves extensionless directory re-exports to index files", async () => {
-    const call = await setupTransform("date-fns", `export { Button } from "./button";`, {
-      "button/index.mjs": `export const Button = "button";`,
-    });
-    const result = await call(`import { Button } from "date-fns";`, "/app/page.tsx");
-
-    const buttonPath = path.posix.join(tmpDir, "node_modules", "date-fns", "button/index.mjs");
-    expect(result!.code).toContain(`import { Button } from ${JSON.stringify(buttonPath)}`);
-  });
-
-  it("preserves directory package entries instead of bypassing them for index files", async () => {
-    const call = await setupTransform("date-fns", `export { Button } from "./button";`, {
-      "button/package.json": JSON.stringify({ module: "./module.js" }),
-      "button/module.js": `export const Button = "module";`,
-      "button/index.js": `export const Button = "index";`,
-    });
-    const result = await call(`import { Button } from "date-fns";`, "/app/page.tsx");
-
-    const buttonDir = path.posix.join(tmpDir, "node_modules", "date-fns", "button");
-    expect(result!.code).toContain(`import { Button } from ${JSON.stringify(buttonDir)}`);
-    expect(result!.code).not.toContain(`${buttonDir}/index.js`);
-  });
-
-  it("does not recurse into an index file before a wildcard directory package entry", async () => {
-    const call = await setupTransform("date-fns", `export * from "./button";`, {
-      "button/package.json": JSON.stringify({ module: "./module.js" }),
-      "button/module.js": `export const Button = "module";`,
-      "button/index.js": `export const Button = "index";`,
-    });
-    const result = await call(`import { Button } from "date-fns";`, "/app/page.tsx");
-
-    expect(result).toBeNull();
   });
 
   it("appends trailing semicolons to all replacement statements", async () => {
