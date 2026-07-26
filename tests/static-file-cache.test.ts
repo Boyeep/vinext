@@ -89,6 +89,17 @@ describe("StaticFileCache", () => {
     expect(cache.lookup("/_next/static/missing-xyz789.js")).toBeUndefined();
   });
 
+  it("ignores precompressed variants that are not smaller than the original", async () => {
+    await writeFile(clientDir, "_next/static/app-abc123.js", "small original");
+    await writeFile(clientDir, "_next/static/app-abc123.js.br", "larger brotli representation");
+
+    const cache = await StaticFileCache.create(clientDir);
+    const entry = cache.lookup("/_next/static/app-abc123.js");
+
+    expect(entry?.br).toBeUndefined();
+    expect(entry?.original.headers.Vary).toBeUndefined();
+  });
+
   it("sets immutable cache-control for hashed assets under /assets/", async () => {
     await writeFile(clientDir, "_next/static/bundle-abc123.js", "x".repeat(100));
 

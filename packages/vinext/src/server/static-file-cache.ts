@@ -164,17 +164,17 @@ export class StaticFileCache {
 
       // Pre-compute compressed variant headers (with Content-Encoding, Vary, correct Content-Length)
       const brInfo = allFiles.get(relativePath + ".br");
-      if (brInfo) {
+      if (brInfo && brInfo.size < fileInfo.size) {
         entry.br = buildVariant(brInfo, baseHeaders, "br");
       }
 
       const gzInfo = allFiles.get(relativePath + ".gz");
-      if (gzInfo) {
+      if (gzInfo && gzInfo.size < fileInfo.size) {
         entry.gz = buildVariant(gzInfo, baseHeaders, "gzip");
       }
 
       const zstInfo = allFiles.get(relativePath + ".zst");
-      if (zstInfo) {
+      if (zstInfo && zstInfo.size < fileInfo.size) {
         entry.zst = buildVariant(zstInfo, baseHeaders, "zstd");
       }
 

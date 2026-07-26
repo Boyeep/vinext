@@ -11,13 +11,29 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import zlib from "node:zlib";
+import { createHash } from "node:crypto";
 import { precompressAssets } from "../packages/vinext/src/build/precompress.js";
 
 /** Write a file with repeated content to ensure it exceeds compression threshold. */
-async function writeAsset(clientDir: string, relativePath: string, content: string): Promise<void> {
+async function writeAsset(
+  clientDir: string,
+  relativePath: string,
+  content: string | Uint8Array,
+): Promise<void> {
   const fullPath = path.join(clientDir, relativePath);
   await fsp.mkdir(path.dirname(fullPath), { recursive: true });
   await fsp.writeFile(fullPath, content);
+}
+
+function deterministicHighEntropyBytes(size: number): Buffer {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for (let index = 0; bytes < size; index++) {
+    const chunk = createHash("sha256").update(`vinext-precompress-${index}`).digest();
+    chunks.push(chunk);
+    bytes += chunk.length;
+  }
+  return Buffer.concat(chunks).subarray(0, size);
 }
 
 describe("precompressAssets", () => {
@@ -80,6 +96,48 @@ describe("precompressAssets", () => {
     expect(fs.existsSync(path.join(clientDir, "_next/static/tiny-aaa111.js.br"))).toBe(false);
     expect(fs.existsSync(path.join(clientDir, "_next/static/tiny-aaa111.js.gz"))).toBe(false);
     expect(result.filesCompressed).toBe(0);
+  });
+
+  it("does not emit compressed representations that are not smaller", async () => {
+    const content = deterministicHighEntropyBytes(4096);
+    await writeAsset(clientDir, "_next/static/random-aaa111.wasm", content);
+
+    const result = await precompressAssets(clientDir);
+
+    expect(result.filesCompressed).toBe(0);
+    expect(fs.existsSync(path.join(clientDir, "_next/static/random-aaa111.wasm.br"))).toBe(false);
+    expect(fs.existsSync(path.join(clientDir, "_next/static/random-aaa111.wasm.gz"))).toBe(false);
+    expect(fs.existsSync(path.join(clientDir, "_next/static/random-aaa111.wasm.zst"))).toBe(false);
+  });
+
+  it("removes obsolete compressed representations on a later run", async () => {
+    const relativePath = "_next/static/changing-aaa111.wasm";
+    const fullPath = path.join(clientDir, relativePath);
+    await writeAsset(clientDir, relativePath, "compressible\n".repeat(500));
+    await precompressAssets(clientDir);
+    expect(fs.existsSync(fullPath + ".br")).toBe(true);
+
+    await writeAsset(clientDir, relativePath, deterministicHighEntropyBytes(4096));
+    await precompressAssets(clientDir);
+
+    expect(fs.existsSync(fullPath + ".br")).toBe(false);
+    expect(fs.existsSync(fullPath + ".gz")).toBe(false);
+    expect(fs.existsSync(fullPath + ".zst")).toBe(false);
+  });
+
+  it("removes obsolete variants when an asset falls below the size threshold", async () => {
+    const relativePath = "_next/static/shrinking-aaa111.js";
+    const fullPath = path.join(clientDir, relativePath);
+    await writeAsset(clientDir, relativePath, "const value = 1;\n".repeat(500));
+    await precompressAssets(clientDir);
+    expect(fs.existsSync(fullPath + ".br")).toBe(true);
+
+    await writeAsset(clientDir, relativePath, "const value = 1;");
+    await precompressAssets(clientDir);
+
+    expect(fs.existsSync(fullPath + ".br")).toBe(false);
+    expect(fs.existsSync(fullPath + ".gz")).toBe(false);
+    expect(fs.existsSync(fullPath + ".zst")).toBe(false);
   });
 
   it("skips non-compressible file types (images, fonts)", async () => {
