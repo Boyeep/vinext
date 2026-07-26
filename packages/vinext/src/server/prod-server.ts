@@ -92,6 +92,7 @@ import {
   parseAcceptedEncodings,
   selectContentEncoding,
 } from "./accept-encoding.js";
+import { matchesIfNoneMatch } from "./http-conditional.js";
 import type { NextI18nConfig } from "../config/next-config.js";
 import { readTrustedRevalidationHostname } from "./revalidation-host.js";
 
@@ -410,15 +411,6 @@ function mergeVaryHeader(
   return merged;
 }
 
-function matchesIfNoneMatchHeader(ifNoneMatch: string | undefined, etag: string): boolean {
-  if (!ifNoneMatch) return false;
-  if (ifNoneMatch === "*") return true;
-  return ifNoneMatch
-    .split(",")
-    .map((value) => value.trim())
-    .some((value) => value === etag);
-}
-
 function installClientBuildManifestGlobals(
   clientDir: string,
   assetBase: string,
@@ -633,7 +625,7 @@ async function tryServeStatic(
     if (
       responseStatus === 200 &&
       typeof ifNoneMatch === "string" &&
-      matchesIfNoneMatchHeader(ifNoneMatch, entry.etag)
+      matchesIfNoneMatch(ifNoneMatch, entry.etag)
     ) {
       const notModifiedHeaders = variesByEncoding
         ? mergeVaryHeader({ ...entry.notModifiedHeaders, ...extraHeaders }, "Accept-Encoding")
@@ -721,7 +713,7 @@ async function tryServeStatic(
     if (
       responseStatus === 200 &&
       typeof ifNoneMatch === "string" &&
-      matchesIfNoneMatchHeader(ifNoneMatch, etag)
+      matchesIfNoneMatch(ifNoneMatch, etag)
     ) {
       const notModifiedHeaders = mergeVaryHeader(baseHeaders, "Accept-Encoding");
       if (encoding !== "identity") notModifiedHeaders["Content-Encoding"] = encoding;
@@ -757,7 +749,7 @@ async function tryServeStatic(
   if (
     responseStatus === 200 &&
     typeof ifNoneMatch === "string" &&
-    matchesIfNoneMatchHeader(ifNoneMatch, etag)
+    matchesIfNoneMatch(ifNoneMatch, etag)
   ) {
     res.writeHead(
       304,
