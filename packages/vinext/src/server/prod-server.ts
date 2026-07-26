@@ -1998,7 +1998,6 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         // Set-Cookie / security headers from middleware are included in the response.
         serveFilesystemRoute: async (requestPathname, stagedHeaders, phase) => {
           if (
-            (req.method !== "GET" && req.method !== "HEAD") ||
             requestPathname === "/" ||
             requestPathname === "/api" ||
             requestPathname.startsWith("/api/") ||

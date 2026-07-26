@@ -6591,6 +6591,14 @@ describe("Production server middleware (Pages Router)", () => {
     expect(await res.text()).toContain("Method Not Allowed");
   });
 
+  it("returns 405 with Allow: GET, HEAD on POST to an existing public file (prod)", async () => {
+    const res = await fetch(`${prodUrl}/dedupe-script.js`, { method: "POST" });
+
+    expect(res.status).toBe(405);
+    expect(res.headers.get("allow")).toBe("GET, HEAD");
+    expect(await res.text()).toBe("Method Not Allowed");
+  });
+
   // Regression for #1331: after a middleware rewrite, the rewrite target
   // must go through full route resolution where static routes win over
   // dynamic catch-alls. Without the fix the `[id]` dynamic page captures

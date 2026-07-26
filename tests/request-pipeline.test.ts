@@ -304,7 +304,7 @@ describe("resolvePublicFileRoute", () => {
     expect(response!.headers.get("x-from-middleware")).toBe("1");
   });
 
-  it("does not signal non-GET/HEAD, RSC, or missing public file requests", () => {
+  it("signals existing public files regardless of method, but excludes RSC and missing files", () => {
     const publicFiles = new Set(["/logo.svg", "/about.rsc"]);
     const middlewareContext = { headers: null, status: null };
 
@@ -315,8 +315,8 @@ describe("resolvePublicFileRoute", () => {
         pathname: "/logo.svg",
         publicFiles,
         request: new Request("https://example.com/logo.svg", { method: "POST" }),
-      }),
-    ).toBeNull();
+      })?.headers.get("x-vinext-static-file"),
+    ).toBe("%2Flogo.svg");
     expect(
       resolvePublicFileRoute({
         cleanPathname: "/about.rsc",

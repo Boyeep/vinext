@@ -1238,6 +1238,14 @@ describe("App Router Production server (startProdServer)", () => {
     expect(await res.text()).toContain("vinext");
   });
 
+  it("returns 405 for unsupported methods on existing public files", async () => {
+    const res = await fetch(`${baseUrl}/logo/logo.svg`, { method: "POST" });
+
+    expect(res.status).toBe(405);
+    expect(res.headers.get("allow")).toBe("GET, HEAD");
+    expect(await res.text()).toBe("Method Not Allowed");
+  });
+
   it("serves public files under basePath and 404s without it", async () => {
     // Ported from Next.js: test/e2e/basepath/basepath.test.ts
     // https://github.com/vercel/next.js/blob/canary/test/e2e/basepath/basepath.test.ts

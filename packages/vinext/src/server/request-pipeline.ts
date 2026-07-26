@@ -139,10 +139,11 @@ export function createStaticFileSignal(
  *
  * Public files are checked after middleware and before afterFiles/fallback
  * rewrites. The generated App Router entry provides the public-file set; this
- * helper owns the request-method and RSC exclusions plus static-file signaling.
+ * helper owns the RSC exclusion and static-file signaling. Method enforcement
+ * happens at the shared static-file server after existence is established, so
+ * real files return 405 while missing mutation targets continue through routing.
  */
 export function resolvePublicFileRoute(options: ResolvePublicFileRouteOptions): Response | null {
-  if (options.request.method !== "GET" && options.request.method !== "HEAD") return null;
   if (options.pathname.endsWith(".rsc")) return null;
   if (!options.publicFiles.has(options.cleanPathname)) return null;
   return createStaticFileSignal(options.cleanPathname, options.middlewareContext);
