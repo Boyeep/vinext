@@ -106,6 +106,55 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     await fsp.rm(clientDir, { recursive: true, force: true });
   });
 
+  it("returns 405 with Allow for unsupported methods on cached assets", async () => {
+    await writeFile(clientDir, "_next/static/app-abc123.js", "console.log('asset')");
+    const cache = await StaticFileCache.create(clientDir);
+    const req = mockReq(undefined, undefined, "POST");
+    const { res, captured } = mockRes();
+
+    const served = await tryServeStatic(
+      req,
+      res,
+      clientDir,
+      "/_next/static/app-abc123.js",
+      true,
+      cache,
+    );
+    await captured.ended;
+
+    expect(served).toBe(true);
+    expect(captured.status).toBe(405);
+    expect(captured.headers.Allow).toBe("GET, HEAD");
+    expect(captured.body.toString()).toBe("Method Not Allowed");
+  });
+
+  it("returns 405 with Allow for unsupported methods on uncached assets", async () => {
+    await writeFile(clientDir, "robots.txt", "User-agent: *");
+    const req = mockReq(undefined, undefined, "DELETE");
+    const { res, captured } = mockRes();
+
+    const served = await tryServeStatic(req, res, clientDir, "/robots.txt", true);
+    await captured.ended;
+
+    expect(served).toBe(true);
+    expect(captured.status).toBe(405);
+    expect(captured.headers.Allow).toBe("GET, HEAD");
+    expect(captured.body.toString()).toBe("Method Not Allowed");
+  });
+
+  it("does not turn missing assets into method errors", async () => {
+    const cache = await StaticFileCache.create(clientDir);
+    const req = mockReq(undefined, undefined, "POST");
+    const { res } = mockRes();
+
+    await expect(
+      tryServeStatic(req, res, clientDir, "/_next/static/missing.js", true, cache),
+    ).resolves.toBe(false);
+    await expect(tryServeStatic(req, res, clientDir, "/public-missing.txt", true)).resolves.toBe(
+      false,
+    );
+  });
+
   // ── Precompressed serving ──────────────────────────────────────
 
   it("serves precompressed brotli for hashed assets when client accepts br", async () => {
