@@ -330,6 +330,41 @@ describe("App Router Production server (startProdServer)", () => {
     expect(html).toContain("<script");
   });
 
+  it("serves static asset byte ranges from the identity representation", async () => {
+    const html = await (await fetch(`${baseUrl}/`)).text();
+    const href = html.match(/["'](\/_next\/static\/[^"']+\.(?:js|css))["']/)?.[1];
+    if (!href) throw new Error("Expected the production HTML to reference a static asset");
+
+    const assetUrl = new URL(href, baseUrl);
+    const full = await fetch(assetUrl);
+    const fullBody = new Uint8Array(await full.arrayBuffer());
+    expect(fullBody.byteLength).toBeGreaterThan(10);
+    expect(full.headers.get("accept-ranges")).toBe("bytes");
+    expect(full.headers.get("last-modified")).not.toBeNull();
+
+    const partial = await fetch(assetUrl, {
+      headers: { Range: "bytes=2-9", "Accept-Encoding": "br, gzip" },
+    });
+    expect(partial.status).toBe(206);
+    expect(partial.headers.get("content-range")).toBe(`bytes 2-9/${fullBody.byteLength}`);
+    expect(partial.headers.get("content-length")).toBe("8");
+    expect(partial.headers.get("content-encoding")).toBeNull();
+    expect(new Uint8Array(await partial.arrayBuffer())).toEqual(fullBody.subarray(2, 10));
+
+    const unsatisfiable = await fetch(assetUrl, {
+      headers: { Range: `bytes=${fullBody.byteLength}-` },
+    });
+    expect(unsatisfiable.status).toBe(416);
+    expect(unsatisfiable.headers.get("content-range")).toBe(`bytes */${fullBody.byteLength}`);
+
+    const head = await fetch(assetUrl, {
+      method: "HEAD",
+      headers: { Range: "bytes=2-9" },
+    });
+    expect(head.status).toBe(200);
+    expect(head.headers.get("content-length")).toBe(String(fullBody.byteLength));
+  });
+
   // Ported from Next.js: test/e2e/app-dir/app-static/app-static.test.ts
   // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/app-static/app-static.test.ts
   it("contains dynamic = 'error' failures without terminating later App Router requests", async () => {

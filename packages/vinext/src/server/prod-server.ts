@@ -92,6 +92,7 @@ import {
   parseAcceptedEncodings,
   selectContentEncoding,
 } from "./accept-encoding.js";
+import { ifRangeAllowsRange, parseByteRange, type ByteRange } from "./http-range.js";
 import type { NextI18nConfig } from "../config/next-config.js";
 import { readTrustedRevalidationHostname } from "./revalidation-host.js";
 
@@ -576,6 +577,11 @@ async function tryServeStatic(
   if (pathname === "/") return false;
   const responseStatus = statusCode ?? 200;
   const omitBody = isNoBodyResponseStatus(responseStatus);
+  // RFC 9110 defines Range for GET. A Range field on HEAD or another method
+  // must not change the selected response status or representation metadata.
+  const requestRange = req.method === "GET" ? req.headers.range : undefined;
+  const rawIfRange = req.headers["if-range"];
+  const ifRange = typeof rawIfRange === "string" ? rawIfRange : undefined;
 
   // ── Fast path: pre-computed headers, minimal per-request work ──
   // When a cache is provided, all path validation happened at startup.
@@ -599,6 +605,15 @@ async function tryServeStatic(
 
     const entry = cache.lookup(lookupPath);
     if (!entry) return false;
+
+    const range = resolveRequestedRange(
+      requestRange,
+      ifRange,
+      entry.original.size,
+      entry.etag,
+      entry.mtimeMs,
+      responseStatus,
+    );
 
     // Pick the best precompressed variant: zstd → br → gzip → original.
     // Each variant has pre-computed headers — zero string building.
@@ -644,7 +659,39 @@ async function tryServeStatic(
       return true;
     }
 
-    const responseHeaders = { ...variant.headers, ...extraHeaders };
+    if (range.kind === "unsatisfiable") {
+      res.writeHead(416, {
+        ...entry.notModifiedHeaders,
+        ...extraHeaders,
+        "Accept-Ranges": "bytes",
+        "Content-Range": `bytes */${entry.original.size}`,
+      });
+      res.end();
+      return true;
+    }
+
+    if (range.kind === "range") {
+      const length = range.end - range.start + 1;
+      res.writeHead(206, {
+        ...entry.original.headers,
+        ...extraHeaders,
+        "Accept-Ranges": "bytes",
+        "Content-Length": String(length),
+        "Content-Range": `bytes ${range.start}-${range.end}/${entry.original.size}`,
+      });
+      if (entry.original.buffer) {
+        res.end(entry.original.buffer.subarray(range.start, range.end + 1));
+      } else {
+        pipeStaticFileRange(entry.original.path, range, res);
+      }
+      return true;
+    }
+
+    const responseHeaders = {
+      ...variant.headers,
+      ...extraHeaders,
+      "Accept-Ranges": "bytes",
+    };
     res.writeHead(
       responseStatus,
       variesByEncoding ? mergeVaryHeader(responseHeaders, "Accept-Encoding") : responseHeaders,
@@ -712,58 +759,76 @@ async function tryServeStatic(
     "Content-Type": ct,
     "Cache-Control": cacheControl,
     ETag: etag,
+    "Last-Modified": new Date(resolved.mtimeMs).toUTCString(),
+    "Accept-Ranges": "bytes",
     ...extraHeaders,
   };
 
-  if (isCompressible) {
-    const encoding = negotiateEncoding(req);
-    const ifNoneMatch = req.headers["if-none-match"];
-    if (
-      responseStatus === 200 &&
-      typeof ifNoneMatch === "string" &&
-      matchesIfNoneMatchHeader(ifNoneMatch, etag)
-    ) {
-      const notModifiedHeaders = mergeVaryHeader(baseHeaders, "Accept-Encoding");
-      if (encoding !== "identity") notModifiedHeaders["Content-Encoding"] = encoding;
-      res.writeHead(304, notModifiedHeaders);
-      res.end();
-      return true;
-    }
-    if (encoding !== "identity") {
-      // Content-Length omitted intentionally: compressed size isn't known
-      // ahead of time, so Node.js uses chunked transfer encoding.
-      res.writeHead(
-        responseStatus,
-        mergeVaryHeader({ ...baseHeaders, "Content-Encoding": encoding }, "Accept-Encoding"),
-      );
-      if (omitBody || req.method === "HEAD") {
-        res.end();
-        return true;
-      }
-      const compressor = createCompressor(encoding);
-      pipeline(fs.createReadStream(resolved.path), compressor, res, (err) => {
-        if (err) {
-          // Headers already sent — can't write a 500. Destroy the connection
-          // so the client sees a reset instead of a truncated response.
-          console.warn(`[vinext] Static file stream error for ${resolved.path}:`, err.message);
-          res.destroy(err);
-        }
-      });
-      return true;
-    }
-  }
+  const range = resolveRequestedRange(
+    requestRange,
+    ifRange,
+    resolved.size,
+    etag,
+    resolved.mtimeMs,
+    responseStatus,
+  );
 
+  const encoding = isCompressible ? negotiateEncoding(req) : "identity";
   const ifNoneMatch = req.headers["if-none-match"];
   if (
     responseStatus === 200 &&
     typeof ifNoneMatch === "string" &&
     matchesIfNoneMatchHeader(ifNoneMatch, etag)
   ) {
-    res.writeHead(
-      304,
-      isCompressible ? mergeVaryHeader(baseHeaders, "Accept-Encoding") : baseHeaders,
-    );
+    const notModifiedHeaders = isCompressible
+      ? mergeVaryHeader(baseHeaders, "Accept-Encoding")
+      : baseHeaders;
+    if (encoding !== "identity") notModifiedHeaders["Content-Encoding"] = encoding;
+    res.writeHead(304, notModifiedHeaders);
     res.end();
+    return true;
+  }
+
+  if (range.kind === "unsatisfiable") {
+    res.writeHead(416, {
+      ...baseHeaders,
+      "Content-Range": `bytes */${resolved.size}`,
+    });
+    res.end();
+    return true;
+  }
+
+  if (range.kind === "range") {
+    const length = range.end - range.start + 1;
+    res.writeHead(206, {
+      ...baseHeaders,
+      "Content-Length": String(length),
+      "Content-Range": `bytes ${range.start}-${range.end}/${resolved.size}`,
+    });
+    pipeStaticFileRange(resolved.path, range, res);
+    return true;
+  }
+
+  if (isCompressible && encoding !== "identity") {
+    // Content-Length omitted intentionally: compressed size isn't known
+    // ahead of time, so Node.js uses chunked transfer encoding.
+    res.writeHead(
+      responseStatus,
+      mergeVaryHeader({ ...baseHeaders, "Content-Encoding": encoding }, "Accept-Encoding"),
+    );
+    if (omitBody || req.method === "HEAD") {
+      res.end();
+      return true;
+    }
+    const compressor = createCompressor(encoding);
+    pipeline(fs.createReadStream(resolved.path), compressor, res, (err) => {
+      if (err) {
+        // Headers already sent — can't write a 500. Destroy the connection
+        // so the client sees a reset instead of a truncated response.
+        console.warn(`[vinext] Static file stream error for ${resolved.path}:`, err.message);
+        res.destroy(err);
+      }
+    });
     return true;
   }
 
@@ -788,6 +853,33 @@ async function tryServeStatic(
     }
   });
   return true;
+}
+
+function resolveRequestedRange(
+  rangeHeader: string | undefined,
+  ifRangeHeader: string | undefined,
+  size: number,
+  etag: string,
+  mtimeMs: number,
+  responseStatus: number,
+): ByteRange {
+  if (responseStatus !== 200 || !ifRangeAllowsRange(ifRangeHeader, etag, mtimeMs)) {
+    return { kind: "ignore" };
+  }
+  return parseByteRange(rangeHeader, size);
+}
+
+function pipeStaticFileRange(
+  filePath: string,
+  range: Extract<ByteRange, { kind: "range" }>,
+  res: ServerResponse,
+): void {
+  pipeline(fs.createReadStream(filePath, { start: range.start, end: range.end }), res, (err) => {
+    if (err) {
+      console.warn(`[vinext] Static file range stream error for ${filePath}:`, err.message);
+      res.destroy(err);
+    }
+  });
 }
 
 type ResolvedFile = {
