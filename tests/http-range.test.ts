@@ -54,5 +54,12 @@ describe("ifRangeAllowsRange", () => {
   it("rejects stale or invalid dates", () => {
     expect(ifRangeAllowsRange("Wed, 31 Dec 2025 23:59:59 GMT", '"asset"', mtimeMs)).toBe(false);
     expect(ifRangeAllowsRange("not-a-date", '"asset"', mtimeMs)).toBe(false);
+    expect(ifRangeAllowsRange("12/31/2099", '"asset"', mtimeMs)).toBe(false);
+    expect(ifRangeAllowsRange("2099-12-31", '"asset"', mtimeMs)).toBe(false);
+  });
+
+  it("accepts obsolete HTTP-date formats required for recipients", () => {
+    expect(ifRangeAllowsRange("Thursday, 01-Jan-26 00:00:01 GMT", '"asset"', mtimeMs)).toBe(true);
+    expect(ifRangeAllowsRange("Thu Jan  1 00:00:01 2026", '"asset"', mtimeMs)).toBe(true);
   });
 });

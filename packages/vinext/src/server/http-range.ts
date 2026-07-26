@@ -55,8 +55,28 @@ export function ifRangeAllowsRange(
     return !trimmed.startsWith("W/") && !etag.startsWith("W/") && trimmed === etag;
   }
 
-  const timestamp = Date.parse(trimmed);
+  const timestamp = parseHttpDate(trimmed);
   return Number.isFinite(timestamp) && Math.floor(mtimeMs / 1000) * 1000 <= timestamp;
+}
+
+const HTTP_WEEKDAY = "(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)";
+const HTTP_WEEKDAY_LONG = "(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)";
+const HTTP_MONTH = "(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)";
+const IMF_FIXDATE_RE = new RegExp(
+  `^${HTTP_WEEKDAY}, \\d{2} ${HTTP_MONTH} \\d{4} \\d{2}:\\d{2}:\\d{2} GMT$`,
+);
+const RFC850_DATE_RE = new RegExp(
+  `^${HTTP_WEEKDAY_LONG}, \\d{2}-${HTTP_MONTH}-\\d{2} \\d{2}:\\d{2}:\\d{2} GMT$`,
+);
+const ASCTIME_DATE_RE = new RegExp(
+  `^${HTTP_WEEKDAY} ${HTTP_MONTH} (?: \\d|\\d{2}) \\d{2}:\\d{2}:\\d{2} \\d{4}$`,
+);
+
+/** Parse only the three HTTP-date wire formats accepted by RFC 9110. */
+function parseHttpDate(value: string): number {
+  if (ASCTIME_DATE_RE.test(value)) return Date.parse(`${value} GMT`);
+  if (!IMF_FIXDATE_RE.test(value) && !RFC850_DATE_RE.test(value)) return Number.NaN;
+  return Date.parse(value);
 }
 
 function parseDecimalInteger(value: string): number | null {
