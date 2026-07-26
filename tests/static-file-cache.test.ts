@@ -341,6 +341,34 @@ describe("StaticFileCache", () => {
     );
   });
 
+  it("serves common web assets with their standard content types", async () => {
+    await Promise.all([
+      writeFile(clientDir, "module.wasm", "wasm"),
+      writeFile(clientDir, "movie.mp4", "video"),
+      writeFile(clientDir, "document.pdf", "pdf"),
+      writeFile(clientDir, "site.webmanifest", "{}"),
+      writeFile(clientDir, "feed.xml", "<feed />"),
+    ]);
+
+    const cache = await StaticFileCache.create(clientDir);
+
+    expect(cache.lookup("/module.wasm")!.original.headers["Content-Type"]).toBe("application/wasm");
+    expect(cache.lookup("/movie.mp4")!.original.headers["Content-Type"]).toBe("video/mp4");
+    expect(cache.lookup("/document.pdf")!.original.headers["Content-Type"]).toBe("application/pdf");
+    expect(cache.lookup("/site.webmanifest")!.original.headers["Content-Type"]).toBe(
+      "application/manifest+json",
+    );
+    expect(cache.lookup("/feed.xml")!.original.headers["Content-Type"]).toBe("application/xml");
+  });
+
+  it("matches file extensions case-insensitively", async () => {
+    await writeFile(clientDir, "logo.SVG", "<svg />");
+
+    const cache = await StaticFileCache.create(clientDir);
+
+    expect(cache.lookup("/logo.SVG")!.original.headers["Content-Type"]).toBe("image/svg+xml");
+  });
+
   // ── Nested directory scanning ──────────────────────────────────
 
   it("scans nested directories recursively", async () => {
