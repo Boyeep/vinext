@@ -371,6 +371,7 @@ const OMIT_STATIC_RESPONSE_HEADERS: ReadonlySet<string> = new Set([
   VINEXT_STATIC_FILE_HEADER,
   "content-encoding",
   "content-length",
+  "content-range",
   "content-type",
 ]);
 

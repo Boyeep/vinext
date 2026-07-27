@@ -768,6 +768,19 @@ describe("Pages Router integration", () => {
     expect(missing.status).not.toBe(405);
   });
 
+  it("does not classify files under a disabled Vite publicDir as static assets", async () => {
+    const disabled = await startFixtureServer(FIXTURE_DIR, { publicDir: false });
+    try {
+      const get = await fetch(`${disabled.baseUrl}/dedupe-script.js`);
+      expect(get.status).not.toBe(200);
+
+      const post = await fetch(`${disabled.baseUrl}/dedupe-script.js`, { method: "POST" });
+      expect(post.status).not.toBe(405);
+    } finally {
+      await disabled.server.close();
+    }
+  });
+
   // Refs #1463: GSP (getStaticProps) pages are also "static" from the
   // routing perspective; POST should produce 405. Mirrors the Next.js
   // condition `(typeof components.Component === 'string' || isSSG)` in

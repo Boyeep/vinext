@@ -1138,6 +1138,39 @@ describe("serveFilesystemRoute", () => {
     expect(renderPage).not.toHaveBeenCalled();
   });
 
+  it("strips stale middleware body headers from static 405 responses", async () => {
+    const serveFilesystemRoute = vi.fn(
+      async () =>
+        new Response("Method Not Allowed", {
+          status: 405,
+          headers: { Allow: "GET, HEAD" },
+        }),
+    );
+    const middleware = makeMiddleware({
+      responseHeaders: [
+        ["content-encoding", "gzip"],
+        ["content-length", "999"],
+        ["content-type", "application/wrong"],
+        ["transfer-encoding", "chunked"],
+        ["x-from-middleware", "1"],
+      ],
+    });
+
+    const result = await runPagesRequest(
+      new Request("https://example.com/file.txt", { method: "POST" }),
+      baseDeps({ serveFilesystemRoute, runMiddleware: middleware }),
+    );
+    expect(result.type).toBe("response");
+    if (result.type !== "response") return;
+    expect(result.response.status).toBe(405);
+    expect(result.response.headers.get("allow")).toBe("GET, HEAD");
+    expect(result.response.headers.get("content-encoding")).toBeNull();
+    expect(result.response.headers.get("content-length")).toBeNull();
+    expect(result.response.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(result.response.headers.get("transfer-encoding")).toBeNull();
+    expect(result.response.headers.get("x-from-middleware")).toBe("1");
+  });
+
   it("falls through to render when serveFilesystemRoute returns false", async () => {
     const renderPage = makeRenderPage(200);
     const serveFilesystemRoute = vi.fn(async () => false);

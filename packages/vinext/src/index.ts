@@ -4579,10 +4579,13 @@ export const loadServerActionClient = ${
           next: (error?: unknown) => void,
         ) => Promise<void>;
         let handlePagesMiddleware: DevPagesMiddleware | null = null;
-        const devPublicDir = server.config.publicDir
-          ? path.resolve(toSlash(server.config.root), toSlash(server.config.publicDir))
-          : path.resolve(toSlash(server.config.root), "public");
+        const configuredPublicDir = server.config.publicDir as string | false;
+        const devPublicDir =
+          configuredPublicDir === false
+            ? null
+            : path.resolve(toSlash(server.config.root), toSlash(configuredPublicDir));
         const isExistingDevPublicFile = (requestPathname: string): boolean => {
+          if (devPublicDir === null) return false;
           const candidate = path.resolve(devPublicDir, `.${requestPathname}`);
           if (!candidate.startsWith(`${devPublicDir}/`)) return false;
           try {

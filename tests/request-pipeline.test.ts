@@ -290,7 +290,13 @@ describe("resolvePublicFileRoute", () => {
     const response = resolvePublicFileRoute({
       cleanPathname: "/logo.svg",
       middlewareContext: {
-        headers: new Headers({ "x-from-middleware": "1" }),
+        headers: new Headers({
+          "content-encoding": "gzip",
+          "content-length": "999",
+          "content-type": "application/wrong",
+          "transfer-encoding": "chunked",
+          "x-from-middleware": "1",
+        }),
         status: 203,
       },
       pathname: "/logo.svg",
@@ -321,6 +327,10 @@ describe("resolvePublicFileRoute", () => {
     expect(mutationResponse?.status).toBe(405);
     expect(mutationResponse?.headers.get("allow")).toBe("GET, HEAD");
     expect(mutationResponse?.headers.get("x-from-middleware")).toBe("1");
+    expect(mutationResponse?.headers.get("content-encoding")).toBeNull();
+    expect(mutationResponse?.headers.get("content-length")).toBeNull();
+    expect(mutationResponse?.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(mutationResponse?.headers.get("transfer-encoding")).toBeNull();
     await expect(mutationResponse?.text()).resolves.toBe("Method Not Allowed");
     expect(
       resolvePublicFileRoute({

@@ -39,7 +39,10 @@ import { mergeRewriteQuery } from "../utils/query.js";
 import { addBasePathToPathname, hasBasePath } from "../utils/base-path.js";
 import { patternToNextFormat } from "../routing/route-validation.js";
 import { isOnDemandRevalidateRequest, PRERENDER_REVALIDATE_HEADER } from "./isr-cache.js";
-import { methodNotAllowedResponse } from "./http-error-responses.js";
+import {
+  methodNotAllowedResponse,
+  sanitizeMethodNotAllowedHeaders,
+} from "./http-error-responses.js";
 
 // All "render options" that are passed through to the renderPage callback
 export type PagesRenderOptions = {
@@ -357,9 +360,13 @@ export async function runPagesRequest(
     if (!deps.serveFilesystemRoute) return null;
     const served = await deps.serveFilesystemRoute(requestPathname, middlewareHeaders, phase);
     if (served instanceof Response) {
+      const response = mergeHeaders(served, middlewareHeaders, middlewareStatus);
+      if (response.status === 405 && response.headers.get("allow") === "GET, HEAD") {
+        sanitizeMethodNotAllowedHeaders(response.headers, "GET, HEAD");
+      }
       return {
         type: "response",
-        response: mergeHeaders(served, middlewareHeaders, middlewareStatus),
+        response,
       };
     }
     return served ? { type: "handled" } : null;
