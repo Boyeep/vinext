@@ -1,5 +1,5 @@
 /** Encode each pathname segment without encoding `/` separators. */
-export function encodePublicFilePath(pathname: string): string {
+function encodePublicFilePath(pathname: string): string {
   return pathname
     .split("/")
     .map((segment) => encodeURIComponent(segment))
