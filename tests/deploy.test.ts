@@ -1246,6 +1246,14 @@ describe("scanPublicFileRoutes", () => {
 
     expect(scanPublicFileRoutes(tmpDir)).toEqual(["/first.txt", "/nested/second.txt"]);
   });
+
+  it("scans the configured public directory and respects publicDir: false", () => {
+    writeFile(tmpDir, "custom-public/custom.txt", "custom");
+    writeFile(tmpDir, "public/default.txt", "default");
+
+    expect(scanPublicFileRoutes(tmpDir, "custom-public")).toEqual(["/custom.txt"]);
+    expect(scanPublicFileRoutes(tmpDir, false)).toEqual([]);
+  });
 });
 
 describe("readPagesRouterEntrySource", () => {

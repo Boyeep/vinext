@@ -1459,6 +1459,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let pagesOptimizeEntries: string[] = [];
   const pagesClientAssetsOutputDirs = new Set<string>();
   let pagesClientAssetsModule: string | null = null;
+  // Dev-only public route inventory. Vite's watcher keeps this synchronized,
+  // so request handling can use O(1) membership checks without filesystem I/O.
+  // Production builds leave it null and scan the configured public directory
+  // once while generating the RSC entry.
+  let devPublicFileRoutes: Set<string> | null = null;
   let rscCompatibilityId: string | undefined;
   let draftModeSecret = getPagesPreviewModeId();
   let previewBuildCredentials: PreviewBuildCredentials | undefined;
@@ -3796,7 +3801,10 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   contentSecurityPolicy: nextConfig?.images?.contentSecurityPolicy,
                 },
                 hasPagesDir,
-                publicFiles: scanPublicFileRoutes(root),
+                publicFiles:
+                  isServeCommand && devPublicFileRoutes
+                    ? [...devPublicFileRoutes].sort()
+                    : scanPublicFileRoutes(root, this.environment.config.publicDir),
                 globalNotFoundPath,
                 draftModeSecret,
               },
@@ -4500,7 +4508,39 @@ export const loadServerActionClient = ${
           socket.on("error", () => {});
         });
 
+        const configuredPublicDir = server.config.publicDir as string | false;
+        const devPublicDir =
+          configuredPublicDir === false
+            ? null
+            : path.resolve(toSlash(server.config.root), toSlash(configuredPublicDir));
+        devPublicFileRoutes = new Set(scanPublicFileRoutes(root, configuredPublicDir));
+        const publicRouteForFile = (filePath: string): string | null => {
+          if (devPublicDir === null) return null;
+          const cleanPath = toSlash(stripViteModuleQuery(filePath));
+          const relativePath = path.relative(devPublicDir, cleanPath);
+          if (
+            relativePath === "" ||
+            relativePath.startsWith("../") ||
+            path.isAbsolute(relativePath)
+          ) {
+            return null;
+          }
+          return `/${relativePath}`;
+        };
+        const updatePublicFileRoute = (filePath: string, present: boolean): void => {
+          const route = publicRouteForFile(filePath);
+          if (route === null || devPublicFileRoutes === null) return;
+          const changed = present
+            ? !devPublicFileRoutes.has(route)
+            : devPublicFileRoutes.has(route);
+          if (!changed) return;
+          if (present) devPublicFileRoutes.add(route);
+          else devPublicFileRoutes.delete(route);
+          if (hasAppDir) invalidateRscEntryModule();
+        };
+
         server.watcher.on("add", (filePath: string) => {
+          updatePublicFileRoute(filePath, true);
           let routeChanged = false;
           const pagesAppChanged = isPagesAppFile(filePath);
           const pagesAssetGraphScriptChanged = isPotentialPagesAssetGraphScript(filePath);
@@ -4542,6 +4582,7 @@ export const loadServerActionClient = ${
           }
         });
         server.watcher.on("unlink", (filePath: string) => {
+          updatePublicFileRoute(filePath, false);
           let routeChanged = false;
           const pagesAppChanged = isPagesAppFile(filePath);
           const pagesAssetGraphScriptChanged = isPotentialPagesAssetGraphScript(filePath);
@@ -4579,21 +4620,8 @@ export const loadServerActionClient = ${
           next: (error?: unknown) => void,
         ) => Promise<void>;
         let handlePagesMiddleware: DevPagesMiddleware | null = null;
-        const configuredPublicDir = server.config.publicDir as string | false;
-        const devPublicDir =
-          configuredPublicDir === false
-            ? null
-            : path.resolve(toSlash(server.config.root), toSlash(configuredPublicDir));
-        const isExistingDevPublicFile = (requestPathname: string): boolean => {
-          if (devPublicDir === null) return false;
-          const candidate = path.resolve(devPublicDir, `.${requestPathname}`);
-          if (!candidate.startsWith(`${devPublicDir}/`)) return false;
-          try {
-            return fs.statSync(candidate).isFile();
-          } catch {
-            return false;
-          }
-        };
+        const isExistingDevPublicFile = (requestPathname: string): boolean =>
+          devPublicFileRoutes?.has(requestPathname) === true;
         const isUnsupportedDevPublicRequest = (
           req: import("node:http").IncomingMessage,
           allowBasePathStripped = false,

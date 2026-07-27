@@ -2301,6 +2301,28 @@ describe("App Router route-miss root layout redirects", () => {
     expect(await res.text()).toBe("Method Not Allowed");
   });
 
+  it("updates App-only public-file mutation handling from watcher events", async () => {
+    const filePath = path.join(
+      ROOT_LAYOUT_NOT_FOUND_REDIRECT_FIXTURE_DIR,
+      "public",
+      "watcher-added.txt",
+    );
+
+    await fsp.writeFile(filePath, "watcher-added", "utf8");
+    server.watcher.emit("add", filePath);
+    try {
+      const added = await fetch(`${baseUrl}/watcher-added.txt`, { method: "POST" });
+      expect(added.status).toBe(405);
+      expect(added.headers.get("allow")).toBe("GET, HEAD");
+    } finally {
+      await fsp.rm(filePath, { force: true });
+      server.watcher.emit("unlink", filePath);
+    }
+
+    const removed = await fetch(`${baseUrl}/watcher-added.txt`, { method: "POST" });
+    expect(removed.status).not.toBe(405);
+  });
+
   // Faithfully combines two Next.js contracts:
   // - route misses render the root not-found page inside the root layout:
   //   https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/not-found/basic/index.test.ts
@@ -2425,5 +2447,30 @@ describe("App Router route-miss root layout redirects", () => {
 
     expect(res.status).toBe(307);
     expect(new URL(res.headers.get("location")!, baseUrl).pathname).toBe("/result");
+  });
+});
+
+describe("App Router custom publicDir in dev", () => {
+  let server: ViteDevServer;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    ({ server, baseUrl } = await startFixtureServer(ROOT_LAYOUT_NOT_FOUND_REDIRECT_FIXTURE_DIR, {
+      appRouter: true,
+      publicDir: "custom-public",
+    }));
+  }, 30000);
+
+  afterAll(async () => {
+    await server?.close();
+  });
+
+  it("uses the configured public directory for mutation matching", async () => {
+    const custom = await fetch(`${baseUrl}/custom.txt`, { method: "POST" });
+    expect(custom.status).toBe(405);
+    expect(custom.headers.get("allow")).toBe("GET, HEAD");
+
+    const defaultPublic = await fetch(`${baseUrl}/static.txt`, { method: "POST" });
+    expect(defaultPublic.status).not.toBe(405);
   });
 });

@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import path from "pathslash";
 
-export function scanPublicFileRoutes(root: string): string[] {
-  const publicDir = path.join(root, "public");
+export function scanPublicFileRoutes(
+  root: string,
+  configuredPublicDir: string | false = "public",
+): string[] {
+  if (configuredPublicDir === false) return [];
+  const publicDir = path.resolve(root, configuredPublicDir);
   const routes: string[] = [];
   const visitedDirs = new Set<string>();
 
