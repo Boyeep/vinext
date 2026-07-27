@@ -137,6 +137,7 @@ describe("tryServeStatic (with StaticFileCache)", () => {
       "X-From-Middleware": "preserved",
       "Set-Cookie": ["a=1", "b=2"],
       "Content-Encoding": "gzip",
+      "Content-Range": "bytes 0-17/18",
       "Content-Type": "application/wrong",
     });
     await captured.ended;
@@ -147,6 +148,7 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     expect(captured.headers["X-From-Middleware"]).toBe("preserved");
     expect(captured.headers["Set-Cookie"]).toEqual(["a=1", "b=2"]);
     expect(captured.headers["Content-Encoding"]).toBeUndefined();
+    expect(captured.headers["Content-Range"]).toBeUndefined();
     expect(captured.headers["Content-Type"]).toBe("text/plain; charset=utf-8");
     expect(captured.body.toString()).toBe("Method Not Allowed");
   });

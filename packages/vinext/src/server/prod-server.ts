@@ -424,6 +424,7 @@ const OMIT_METHOD_NOT_ALLOWED_HEADERS: ReadonlySet<string> = new Set([
   "allow",
   "content-encoding",
   "content-length",
+  "content-range",
   "content-type",
   "transfer-encoding",
 ]);
