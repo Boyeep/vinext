@@ -351,8 +351,27 @@ describe("App Router Production server (startProdServer)", () => {
     expect(partial.headers.get("content-encoding")).toBeNull();
     expect(new Uint8Array(await partial.arrayBuffer())).toEqual(fullBody.subarray(2, 10));
 
+    const hugeEnd = await fetch(assetUrl, {
+      headers: { Range: "bytes=2-9007199254740992" },
+    });
+    expect(hugeEnd.status).toBe(206);
+    expect(hugeEnd.headers.get("content-range")).toBe(
+      `bytes 2-${fullBody.length - 1}/${fullBody.length}`,
+    );
+    expect(new Uint8Array(await hugeEnd.arrayBuffer())).toEqual(fullBody.subarray(2));
+
+    const invalidIfRange = await fetch(assetUrl, {
+      headers: {
+        Range: "bytes=2-9",
+        "If-Range": "Sun, 31 Feb 2099 00:00:00 GMT",
+      },
+    });
+    expect(invalidIfRange.status).toBe(200);
+    expect(invalidIfRange.headers.get("content-range")).toBeNull();
+    expect(new Uint8Array(await invalidIfRange.arrayBuffer())).toEqual(fullBody);
+
     const unsatisfiable = await fetch(assetUrl, {
-      headers: { Range: `bytes=${fullBody.byteLength}-` },
+      headers: { Range: "bytes=9007199254740992-" },
     });
     expect(unsatisfiable.status).toBe(416);
     expect(unsatisfiable.headers.get("content-range")).toBe(`bytes */${fullBody.byteLength}`);

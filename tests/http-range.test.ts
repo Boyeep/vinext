@@ -28,7 +28,21 @@ describe("parseByteRange", () => {
     expect(parseByteRange("items=0-2", 10)).toEqual({ kind: "ignore" });
     expect(parseByteRange("bytes=abc", 10)).toEqual({ kind: "ignore" });
     expect(parseByteRange("bytes=0-1,4-5", 10)).toEqual({ kind: "ignore" });
-    expect(parseByteRange("bytes=9007199254740992-", 10)).toEqual({ kind: "ignore" });
+  });
+
+  it("preserves valid range semantics above Number.MAX_SAFE_INTEGER", () => {
+    expect(parseByteRange("bytes=9007199254740992-", 10)).toEqual({ kind: "unsatisfiable" });
+    expect(parseByteRange("bytes=2-9007199254740992", 10)).toEqual({
+      kind: "range",
+      start: 2,
+      end: 9,
+    });
+    expect(parseByteRange("bytes=-9007199254740992", 10)).toEqual({
+      kind: "range",
+      start: 0,
+      end: 9,
+    });
+    expect(parseByteRange("bytes=-9007199254740992", 0)).toEqual({ kind: "unsatisfiable" });
   });
 });
 
@@ -56,6 +70,8 @@ describe("ifRangeAllowsRange", () => {
     expect(ifRangeAllowsRange("not-a-date", '"asset"', mtimeMs)).toBe(false);
     expect(ifRangeAllowsRange("12/31/2099", '"asset"', mtimeMs)).toBe(false);
     expect(ifRangeAllowsRange("2099-12-31", '"asset"', mtimeMs)).toBe(false);
+    expect(ifRangeAllowsRange("Sun, 31 Feb 2099 00:00:00 GMT", '"asset"', mtimeMs)).toBe(false);
+    expect(ifRangeAllowsRange("Fri, 01 Jan 2026 00:00:00 GMT", '"asset"', mtimeMs)).toBe(false);
   });
 
   it("accepts obsolete HTTP-date formats required for recipients", () => {
