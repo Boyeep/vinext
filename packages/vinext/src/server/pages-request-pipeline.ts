@@ -545,14 +545,6 @@ export async function runPagesRequest(
     };
   }
 
-  // Step 8b: Public-directory static files (post-middleware).
-  // Served after middleware so middleware can intercept/redirect public files, and
-  // before rewrites so a real public file wins over a fallback rewrite — matching the
-  // pre-refactor prod-server ordering. Adapter callbacks own their path guards;
-  // a true result means Node already wrote the response.
-  const directFilesystemResult = await serveFilesystemRoute(pathname, "direct");
-  if (directFilesystemResult) return directFilesystemResult;
-
   // Step 9: beforeFiles rewrites
   // Next.js server-utils.ts applies every beforeFiles rule in sequence and
   // continues afterFiles/fallback rules until a destination resolves.
@@ -576,13 +568,17 @@ export async function runPagesRequest(
     }
   }
 
-  // beforeFiles destinations re-enter filesystem matching before API/page
-  // routing. afterFiles and fallback rewrites repeat the same checkpoint in
-  // their phase-specific loops below.
-  if (configRewriteFired) {
-    const beforeFilesResult = await serveFilesystemRoute(resolvedPathname, "beforeFiles");
-    if (beforeFilesResult) return beforeFilesResult;
-  }
+  // Next.js resolves middleware and every beforeFiles rewrite before checking
+  // the filesystem. This matters when a rewrite moves an existing public-file
+  // pathname to a page or API route: the rewritten destination wins rather
+  // than the original file producing a static response (or method-level 405).
+  // afterFiles and fallback rewrites repeat the same checkpoint in their
+  // phase-specific loops below.
+  const initialFilesystemResult = await serveFilesystemRoute(
+    resolvedPathname,
+    resolvedPathnameIsRequestPathname ? "direct" : "beforeFiles",
+  );
+  if (initialFilesystemResult) return initialFilesystemResult;
 
   const isOutsideBasePathUnclaimed = () => basePath && !hadBasePath && !configRewriteFired;
   const outOfBasePathNotFound = (): PagesPipelineResult => ({

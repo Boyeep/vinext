@@ -4594,6 +4594,29 @@ export const loadServerActionClient = ${
             return false;
           }
         };
+        const isUnsupportedDevPublicRequest = (
+          req: import("node:http").IncomingMessage,
+          allowBasePathStripped = false,
+        ): boolean => {
+          if (req.method === "GET" || req.method === "HEAD") return false;
+          let pathname: string;
+          try {
+            pathname = normalizePathnameForRouteMatchStrict(
+              new URL(req.url ?? "/", "http://vinext.invalid").pathname,
+            );
+          } catch {
+            return false;
+          }
+          const basePath = nextConfig?.basePath ?? "";
+          if (basePath) {
+            if (hasBasePath(pathname, basePath)) {
+              pathname = stripBasePath(pathname, basePath);
+            } else if (!allowBasePathStripped) {
+              return false;
+            }
+          }
+          return isExistingDevPublicFile(pathname);
+        };
 
         // ── Dev request origin check ─────────────────────────────────────
         // Registered directly (not in the returned function) so it runs
@@ -4624,28 +4647,9 @@ export const loadServerActionClient = ${
         // to known public files before Vite's internals, then run the canonical
         // Pages pipeline so config/middleware ordering and headers are retained.
         server.middlewares.use((req, res, next) => {
-          if (
-            !hasPagesDir ||
-            req.method === "GET" ||
-            req.method === "HEAD" ||
-            !handlePagesMiddleware
-          ) {
+          if (!hasPagesDir || !handlePagesMiddleware || !isUnsupportedDevPublicRequest(req)) {
             return next();
           }
-          let pathname: string;
-          try {
-            pathname = normalizePathnameForRouteMatchStrict(
-              new URL(req.url ?? "/", "http://vinext.invalid").pathname,
-            );
-          } catch {
-            return next();
-          }
-          const basePath = nextConfig?.basePath ?? "";
-          if (basePath) {
-            if (!hasBasePath(pathname, basePath)) return next();
-            pathname = stripBasePath(pathname, basePath);
-          }
-          if (!isExistingDevPublicFile(pathname)) return next();
           void handlePagesMiddleware(req, res, next);
         });
 
@@ -4663,6 +4667,34 @@ export const loadServerActionClient = ${
               (handle): handle is import("vite").Connect.NextHandleFunction =>
                 typeof handle === "function",
             );
+
+          // The patched Vite sirv middleware serves public files for every
+          // method. In an App-only project, let mutations pass through to the
+          // RSC request handler, which applies Next.js' middleware ->
+          // beforeFiles -> filesystem ordering and returns the canonical 405
+          // only if the resolved pathname is still a real public file.
+          if (hasAppDir && !hasPagesDir) {
+            const publicMiddlewareEntry = server.middlewares.stack.find(
+              ({ handle }) =>
+                typeof handle === "function" && handle.name === "viteServePublicMiddleware",
+            );
+            const viteServePublic = publicMiddlewareEntry?.handle as
+              | import("vite").Connect.NextHandleFunction
+              | undefined;
+            if (publicMiddlewareEntry && viteServePublic) {
+              const vinextServePublicMiddleware: import("vite").Connect.NextHandleFunction = (
+                req,
+                res,
+                next,
+              ) => {
+                // Vite's base middleware runs before its public middleware,
+                // so req.url may already have had nextConfig.basePath removed.
+                if (isUnsupportedDevPublicRequest(req, true)) return next();
+                return viteServePublic(req, res, next);
+              };
+              publicMiddlewareEntry.handle = vinextServePublicMiddleware;
+            }
+          }
 
           const serveRewrittenViteFilesystemRoute = async (
             req: import("node:http").IncomingMessage,

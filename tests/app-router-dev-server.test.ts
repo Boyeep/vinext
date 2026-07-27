@@ -2291,6 +2291,16 @@ describe("App Router route-miss root layout redirects", () => {
     await server?.close();
   });
 
+  // Next.js' shared router-server checks the matched filesystem output before
+  // rejecting unsupported methods in both dev and production.
+  it("returns 405 for public-file mutations in an App-only dev project", async () => {
+    const res = await fetch(`${baseUrl}/static.txt`, { method: "POST" });
+
+    expect(res.status).toBe(405);
+    expect(res.headers.get("allow")).toBe("GET, HEAD");
+    expect(await res.text()).toBe("Method Not Allowed");
+  });
+
   // Faithfully combines two Next.js contracts:
   // - route misses render the root not-found page inside the root layout:
   //   https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/not-found/basic/index.test.ts
