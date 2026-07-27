@@ -75,12 +75,14 @@ describe("dev public ETag Vite configuration", () => {
       const dotlessIFile = path.join(publicDir, "ı.js");
       const sigmaFile = path.join(publicDir, "Σ.js");
       const ypogegrammeniFile = path.join(publicDir, "ͅ.js");
+      const mixedExpansionFile = path.join(publicDir, "ßı.js");
       fs.writeFileSync(mixedCaseFile, "mixed");
       fs.writeFileSync(unicodeFile, "unicode");
       fs.writeFileSync(sharpSFile, "sharp-s");
       fs.writeFileSync(dotlessIFile, "dotless-i");
       fs.writeFileSync(sigmaFile, "sigma");
       fs.writeFileSync(ypogegrammeniFile, "ypogegrammeni");
+      fs.writeFileSync(mixedExpansionFile, "mixed-expansion");
       fs.mkdirSync(path.join(publicDir, "Straße"));
       fs.writeFileSync(path.join(publicDir, "Straße", "Maße.js"), "nested-sharp-s");
       fs.symlinkSync("missing", path.join(publicDir, "0-broken"));
@@ -98,6 +100,16 @@ describe("dev public ETag Vite configuration", () => {
           })
         ).status,
       ).toBe(304);
+
+      const mixedExpansionEtag = (await fetch(`${baseUrl}/%C3%9F%C4%B1.js`)).headers.get("etag");
+      expect(mixedExpansionEtag).toMatch(/^W\//);
+      const mixedExpansionFallback = await fetch(`${baseUrl}/SSi.js`, {
+        headers: { "If-None-Match": mixedExpansionEtag!.replace(/^W\//, "") },
+      });
+      expect(mixedExpansionFallback.status).toBe(200);
+      expect(mixedExpansionFallback.headers.get("x-fallback-if-none-match")).toBe(
+        mixedExpansionEtag!.replace(/^W\//, ""),
+      );
 
       const ypogegrammeniEtag = (await fetch(`${baseUrl}/%CD%85.js`)).headers.get("etag");
       expect(ypogegrammeniEtag).toMatch(/^W\//);

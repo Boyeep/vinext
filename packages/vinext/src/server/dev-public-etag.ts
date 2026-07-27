@@ -27,12 +27,10 @@ type DevPublicAliasCandidate = {
   segment: string;
   node: DevPublicPathNode;
   simpleCasePattern: RegExp;
+  expandedCaseTokens: string[];
 };
 
-const unicodeAccentCollator = new Intl.Collator("und", {
-  usage: "search",
-  sensitivity: "accent",
-});
+const simpleCasePatterns = new Map<string, RegExp>();
 
 export function createDevPublicFileEtags(
   externalPublicDir: string,
@@ -260,6 +258,9 @@ function indexRequestPath(
           `^(?:${escapeRegex(index.normalizationInsensitive ? segment.normalize("NFD") : segment)})$`,
           "iu",
         ),
+        expandedCaseTokens: expandCaseTokens(
+          index.normalizationInsensitive ? segment.normalize("NFD") : segment,
+        ),
       });
     }
     node = child;
@@ -393,16 +394,32 @@ function segmentsEquivalent(
     : candidate.segment;
   if (!index.caseInsensitive) return normalizedLeft === normalizedRight;
   if (candidate.simpleCasePattern.test(normalizedLeft)) return true;
-  if (!hasLengthChangingUppercase(normalizedLeft) && !hasLengthChangingUppercase(normalizedRight)) {
-    return false;
-  }
+  const leftTokens = expandCaseTokens(normalizedLeft);
   return (
-    unicodeAccentCollator.compare(normalizedLeft.toUpperCase(), normalizedRight.toUpperCase()) === 0
+    leftTokens.length === candidate.expandedCaseTokens.length &&
+    leftTokens.every((token, index) =>
+      simpleCaseEquivalent(token, candidate.expandedCaseTokens[index]!),
+    )
   );
 }
 
-function hasLengthChangingUppercase(value: string): boolean {
-  return Array.from(value.toUpperCase()).length !== Array.from(value).length;
+function expandCaseTokens(value: string): string[] {
+  const tokens: string[] = [];
+  for (const char of value) {
+    const uppercase = Array.from(char.toUpperCase());
+    if (uppercase.length > 1) tokens.push(...uppercase);
+    else tokens.push(char);
+  }
+  return tokens;
+}
+
+function simpleCaseEquivalent(left: string, right: string): boolean {
+  let pattern = simpleCasePatterns.get(right);
+  if (!pattern) {
+    pattern = new RegExp(`^(?:${escapeRegex(right)})$`, "iu");
+    simpleCasePatterns.set(right, pattern);
+  }
+  return pattern.test(left);
 }
 
 function escapeRegex(value: string): string {
