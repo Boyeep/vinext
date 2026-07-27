@@ -238,10 +238,41 @@ describe("dev public ETag Vite configuration", () => {
         .toBe(304);
     },
   );
+
+  it.runIf(process.platform === "darwin")(
+    "keeps unverified Unicode aliases distinct from dotted files and symlinks",
+    async () => {
+      const root = createRoot("ı-etag-root-");
+      const publicDir = path.join(root, "public");
+      fs.mkdirSync(publicDir);
+      fs.writeFileSync(path.join(publicDir, "MixedCase.js"), "mixed");
+      fs.writeFileSync(path.join(publicDir, "target.js"), "target");
+      fs.symlinkSync("target.js", path.join(publicDir, "i.js"));
+
+      const baseUrl = await startServer(root, "public");
+      const mixedEtag = (await fetch(`${baseUrl}/MixedCase.js`)).headers.get("etag")!;
+      expect(
+        (
+          await fetch(`${baseUrl}/mixedcase.js`, {
+            headers: { "If-None-Match": mixedEtag.replace(/^W\//, "") },
+          })
+        ).status,
+      ).toBe(304);
+
+      const dottedEtag = (await fetch(`${baseUrl}/i.js`)).headers.get("etag")!;
+      const dotlessFallback = await fetch(`${baseUrl}/%C4%B1.js`, {
+        headers: { "If-None-Match": dottedEtag.replace(/^W\//, "") },
+      });
+      expect(dotlessFallback.status).toBe(200);
+      expect(dotlessFallback.headers.get("x-fallback-if-none-match")).toBe(
+        dottedEtag.replace(/^W\//, ""),
+      );
+    },
+  );
 });
 
-function createRoot(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-dev-public-config-"));
+function createRoot(prefix = "vinext-dev-public-config-"): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   roots.push(root);
   return root;
 }
