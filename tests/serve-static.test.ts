@@ -496,7 +496,7 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     expect(captured.body).toHaveLength(0);
   });
 
-  it("returns 412 for matching If-None-Match on an unsafe cached request", async () => {
+  it("returns 405 before evaluating conditions on an unsupported cached request", async () => {
     await writeFile(clientDir, "unsafe-conditional.txt", "cached content");
     const cache = await StaticFileCache.create(clientDir);
     const entry = cache.lookup("/unsafe-conditional.txt")!;
@@ -506,8 +506,9 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     await tryServeStatic(req, res, clientDir, "/unsafe-conditional.txt", true, cache);
     await captured.ended;
 
-    expect(captured.status).toBe(412);
-    expect(captured.body).toHaveLength(0);
+    expect(captured.status).toBe(405);
+    expect(captured.headers.Allow).toBe("GET, HEAD");
+    expect(captured.body.toString()).toBe("Method Not Allowed");
   });
 
   it("evaluates conditions against validators overridden by response headers", async () => {
@@ -884,6 +885,15 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     expect(unsatisfiable.headers["Content-Type"]).toBe("application/javascript; charset=utf-8");
     expect(unsatisfiable.headers["Content-Range"]).toBe("bytes */10");
     expect(unsatisfiable.body).toHaveLength(0);
+
+    const headReq = mockReq(undefined, { range: "bytes=2-5" }, "HEAD");
+    const { res: headRes, captured: head } = mockRes();
+    await tryServeStatic(headReq, headRes, clientDir, `/${relativePath}`, true, cache);
+    await head.ended;
+    expect(head.status).toBe(206);
+    expect(head.headers["Content-Range"]).toBe("bytes 2-5/10");
+    expect(head.headers["Content-Length"]).toBe("4");
+    expect(head.body).toHaveLength(0);
   });
 
   // ── Slow path (no cache) ───────────────────────────────────────
@@ -939,6 +949,28 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     expect(range.headers.Vary).toBe("Accept-Encoding");
     expect(range.headers["Content-Encoding"]).toBeUndefined();
     expect(range.body.toString()).toBe("2345");
+
+    const headReq = mockReq(undefined, { range: "bytes=2-5" }, "HEAD");
+    const { res: headRes, captured: head } = mockRes();
+    await tryServeStatic(headReq, headRes, clientDir, "/if-range.txt", true);
+    await head.ended;
+    expect(head.status).toBe(206);
+    expect(head.headers["Content-Range"]).toBe("bytes 2-5/10");
+    expect(head.headers["Content-Length"]).toBe("4");
+    expect(head.body).toHaveLength(0);
+  });
+
+  it("returns 405 before evaluating conditions on an unsupported slow request", async () => {
+    await writeFile(clientDir, "unsafe-slow.txt", "slow content");
+    const req = mockReq(undefined, { "if-none-match": "*" }, "POST");
+    const { res, captured } = mockRes();
+
+    await tryServeStatic(req, res, clientDir, "/unsafe-slow.txt", true);
+    await captured.ended;
+
+    expect(captured.status).toBe(405);
+    expect(captured.headers.Allow).toBe("GET, HEAD");
+    expect(captured.body.toString()).toBe("Method Not Allowed");
   });
 
   it("slow path does not vary non-compressible files", async () => {

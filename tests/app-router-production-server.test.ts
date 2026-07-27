@@ -396,9 +396,9 @@ describe("App Router Production server (startProdServer)", () => {
         "If-Range": "Thu, 01 Jan 2099 00:00:00 GMT",
       },
     });
-    expect(futureIfRange.status).toBe(200);
-    expect(futureIfRange.headers.get("content-range")).toBeNull();
-    expect(new Uint8Array(await futureIfRange.arrayBuffer())).toEqual(fullBody);
+    expect(futureIfRange.status).toBe(206);
+    expect(futureIfRange.headers.get("content-range")).toBe(`bytes 2-9/${fullBody.byteLength}`);
+    expect(new Uint8Array(await futureIfRange.arrayBuffer())).toEqual(fullBody.subarray(2, 10));
 
     const invalidIfRange = await fetch(assetUrl, {
       headers: {
@@ -420,8 +420,10 @@ describe("App Router Production server (startProdServer)", () => {
       method: "HEAD",
       headers: { Range: "bytes=2-9" },
     });
-    expect(head.status).toBe(200);
-    expect(head.headers.get("content-length")).toBe(String(fullBody.byteLength));
+    expect(head.status).toBe(206);
+    expect(head.headers.get("content-range")).toBe(`bytes 2-9/${fullBody.byteLength}`);
+    expect(head.headers.get("content-length")).toBe("8");
+    expect((await head.arrayBuffer()).byteLength).toBe(0);
   });
 
   it("evaluates static asset preconditions before byte ranges", async () => {
@@ -466,12 +468,16 @@ describe("App Router Production server (startProdServer)", () => {
     expect(head.status).toBe(304);
     expect(head.body).toHaveLength(0);
 
-    const unsafe = await rawHttpRequest(assetUrl, {
+    const unsafe = await rawHttpRequest(assetUrl, { method: "POST" });
+    expect(unsafe.status).toBe(405);
+    expect(unsafe.headers.allow).toBe("GET, HEAD");
+
+    const unsafeConditional = await rawHttpRequest(assetUrl, {
       method: "POST",
       headers: { "If-None-Match": etag },
     });
-    expect(unsafe.status).toBe(412);
-    expect(unsafe.body).toHaveLength(0);
+    expect(unsafeConditional.status).toBe(405);
+    expect(unsafeConditional.headers.allow).toBe("GET, HEAD");
 
     const forcedRange = await rawHttpRequest(assetUrl, {
       headers: {

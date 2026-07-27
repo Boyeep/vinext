@@ -570,9 +570,10 @@ async function tryServeStatic(
   if (pathname === "/") return false;
   const responseStatus = statusCode ?? 200;
   const omitBody = isNoBodyResponseStatus(responseStatus);
-  // RFC 9110 defines Range for GET. A Range field on HEAD or another method
-  // must not change the selected response status or representation metadata.
-  const requestRange = req.method === "GET" ? req.headers.range : undefined;
+  // Match Next.js's `send` behavior: HEAD evaluates Range like GET, then omits
+  // the selected representation body.
+  const requestRange =
+    req.method === "GET" || req.method === "HEAD" ? req.headers.range : undefined;
   const rawIfRange = req.headers["if-range"];
   const ifRange = typeof rawIfRange === "string" ? rawIfRange : undefined;
 
@@ -598,6 +599,10 @@ async function tryServeStatic(
 
     const entry = cache.lookup(lookupPath);
     if (!entry) return false;
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      sendStaticMethodNotAllowed(res, extraHeaders);
+      return true;
+    }
 
     // Pick the best precompressed variant: zstd → br → gzip → original.
     // Each variant has pre-computed headers — zero string building.
@@ -696,6 +701,10 @@ async function tryServeStatic(
         206,
         variesByEncoding ? mergeVaryHeader(rangeHeaders, "Accept-Encoding") : rangeHeaders,
       );
+      if (req.method === "HEAD") {
+        res.end();
+        return true;
+      }
       if (entry.original.buffer) {
         res.end(entry.original.buffer.subarray(range.start, range.end + 1));
       } else {
@@ -752,6 +761,10 @@ async function tryServeStatic(
 
   const resolved = await resolveStaticFile(staticFile);
   if (!resolved) return false;
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    sendStaticMethodNotAllowed(res, extraHeaders);
+    return true;
+  }
 
   const ext = path.extname(resolved.path);
   const ct = contentTypeForPath(resolved.path);
@@ -843,6 +856,10 @@ async function tryServeStatic(
       206,
       isCompressible ? mergeVaryHeader(rangeHeaders, "Accept-Encoding") : rangeHeaders,
     );
+    if (req.method === "HEAD") {
+      res.end();
+      return true;
+    }
     pipeStaticFileRange(resolved.path, range, res);
     return true;
   }
@@ -891,6 +908,20 @@ async function tryServeStatic(
     }
   });
   return true;
+}
+
+function sendStaticMethodNotAllowed(
+  res: ServerResponse,
+  extraHeaders?: Record<string, string | string[]>,
+): void {
+  const body = "Method Not Allowed";
+  res.writeHead(405, {
+    ...extraHeaders,
+    Allow: "GET, HEAD",
+    "Content-Type": "text/plain; charset=utf-8",
+    "Content-Length": String(Buffer.byteLength(body)),
+  });
+  res.end(body);
 }
 
 function resolveStaticValidators(
