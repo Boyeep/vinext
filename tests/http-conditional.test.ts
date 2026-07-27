@@ -46,6 +46,7 @@ describe("matchesIfNoneMatch", () => {
 
   it("rejects malformed entity tags", () => {
     expect(matchesIfNoneMatch('asset, "match"', '"match"')).toBe(false);
+    expect(matchesIfNoneMatch('"match", garbage', '"match"')).toBe(false);
     expect(matchesIfNoneMatch('"unterminated', '"unterminated"')).toBe(false);
     expect(matchesIfNoneMatch('W/ "asset"', '"asset"')).toBe(false);
     expect(matchesIfNoneMatch('"asset" suffix', '"asset"')).toBe(false);
