@@ -35,6 +35,15 @@ describe("resolveDevPublicIfNoneMatch", () => {
     expect(
       resolveDevPublicIfNoneMatch("HEAD", "/base/asset.js", '"90-1234"', publicEtags, "/base"),
     ).toBe(ETAG);
+    expect(
+      resolveDevPublicIfNoneMatch(
+        "GET",
+        "/base/a/%2e%2e//asset.js",
+        '"90-1234"',
+        publicEtags,
+        "/base",
+      ),
+    ).toBe(ETAG);
   });
 
   it("does not affect methods, missing files, or paths outside basePath", () => {

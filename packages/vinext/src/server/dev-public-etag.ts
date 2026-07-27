@@ -3,6 +3,7 @@ import path, { toSlash } from "pathslash";
 import { hasBasePath, stripBasePath } from "../utils/base-path.js";
 import { scanPublicFileRoutes } from "../utils/public-routes.js";
 import { matchesIfNoneMatch } from "./http-conditional.js";
+import { normalizePath } from "./normalize-path.js";
 
 export function createDevPublicFileEtags(root: string): Map<string, string> {
   const etags = new Map<string, string>();
@@ -62,7 +63,7 @@ export function resolveDevPublicIfNoneMatch(
     pathname = stripBasePath(pathname, basePath);
   }
   try {
-    pathname = decodeURI(pathname);
+    pathname = normalizePath(decodeURI(pathname));
   } catch {
     return undefined;
   }

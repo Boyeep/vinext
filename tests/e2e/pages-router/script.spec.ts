@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { request as httpRequest } from "node:http";
 
 const BASE = "http://localhost:4173";
 
@@ -24,6 +25,20 @@ test.describe("next/script", () => {
       headers: { "If-None-Match": strong },
     });
     expect(headResponse.status()).toBe(304);
+
+    const normalizedPathStatus = await new Promise<number | undefined>((resolve, reject) => {
+      const req = httpRequest(
+        `${BASE}/nested/%2e%2e//dedupe-script.js`,
+        { headers: { "If-None-Match": strong } },
+        (response) => {
+          response.resume();
+          response.on("end", () => resolve(response.statusCode));
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+    expect(normalizedPathStatus).toBe(304);
   });
 
   // Ported from Next.js: packages/next/src/client/script.tsx
