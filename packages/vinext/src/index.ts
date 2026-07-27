@@ -4262,9 +4262,9 @@ export const loadServerActionClient = ${
       },
 
       configureServer(server: ViteDevServer) {
-        const devPublicFileEtags = createDevPublicFileEtags(root);
+        let devPublicFileEtags = createDevPublicFileEtags(root);
 
-        server.middlewares.use((req, res, next) => {
+        server.middlewares.use((req, _res, next) => {
           req.__vinextOriginalEncodedUrl ??= req.url;
           const normalizedIfNoneMatch = resolveDevPublicIfNoneMatch(
             req.method,
@@ -4278,19 +4278,20 @@ export const loadServerActionClient = ${
             // exact string. Resolve RFC weak/list/wildcard matching here, then
             // give sirv the exact value so its normal 304 path handles the body.
             req.headers["if-none-match"] = normalizedIfNoneMatch;
-            res.setHeader("ETag", normalizedIfNoneMatch);
           }
           next();
         });
 
         const updateDevPublicEtag = (filePath: string) => {
-          updateDevPublicFileEtag(devPublicFileEtags, root, filePath);
+          if (!updateDevPublicFileEtag(devPublicFileEtags, filePath)) {
+            devPublicFileEtags = createDevPublicFileEtags(root);
+          }
         };
         server.watcher.on("add", updateDevPublicEtag);
         server.watcher.on("change", updateDevPublicEtag);
-        server.watcher.on("unlink", (filePath: string) => {
-          updateDevPublicFileEtag(devPublicFileEtags, root, filePath, true);
-        });
+        server.watcher.on("unlink", updateDevPublicEtag);
+        server.watcher.on("addDir", updateDevPublicEtag);
+        server.watcher.on("unlinkDir", updateDevPublicEtag);
 
         // Watch route files for additions/removals to invalidate route cache.
         const pageExtensions = fileMatcher.extensionRegex;

@@ -14,7 +14,6 @@ test.describe("next/script", () => {
       headers: { "If-None-Match": strong },
     });
     expect(strongResponse.status()).toBe(304);
-    expect(strongResponse.headers().etag).toBe(etag);
 
     const listResponse = await request.get(`${BASE}/dedupe-script.js`, {
       headers: { "If-None-Match": `"other", ${strong}` },
