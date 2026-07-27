@@ -338,14 +338,15 @@ describe("tryServeStatic (with StaticFileCache)", () => {
 
   // ── 304 Not Modified (conditional requests) ────────────────────
 
-  it("returns 304 when If-None-Match matches the ETag", async () => {
+  it("returns 304 when a strong If-None-Match matches a weak ETag", async () => {
     await writeFile(clientDir, "_next/static/cached-aaa111.js", "cached content");
 
     const cache = await StaticFileCache.create(clientDir);
     const entry = cache.lookup("/_next/static/cached-aaa111.js");
     const etag = entry!.etag;
+    expect(etag).toMatch(/^W\//);
 
-    const req = mockReq(undefined, { "if-none-match": etag });
+    const req = mockReq(undefined, { "if-none-match": etag.slice(2) });
     const { res, captured } = mockRes();
 
     const served = await tryServeStatic(
