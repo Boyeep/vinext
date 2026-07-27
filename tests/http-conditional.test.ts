@@ -47,6 +47,7 @@ describe("matchesIfNoneMatch", () => {
     expect(matchesIfNoneMatch('"unterminated', '"unterminated"')).toBe(false);
     expect(matchesIfNoneMatch('W/ "asset"', '"asset"')).toBe(false);
     expect(matchesIfNoneMatch('"asset" suffix', '"asset"')).toBe(false);
+    expect(matchesIfNoneMatch('"asset\x7fpart"', '"asset\x7fpart"')).toBe(false);
   });
 
   it("ignores empty list members", () => {

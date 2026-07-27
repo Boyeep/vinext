@@ -55,7 +55,9 @@ function parseEntityTag(value: string, start: number): ParsedEntityTag | null {
     const code = value.charCodeAt(index);
     // etagc = %x21 / %x23-7E / obs-text. A backslash is an ordinary
     // character here; entity tags do not use quoted-string escaping.
-    if (code !== 0x21 && (code < 0x23 || code > 0xff)) return null;
+    const isEtagCharacter =
+      code === 0x21 || (code >= 0x23 && code <= 0x7e) || (code >= 0x80 && code <= 0xff);
+    if (!isEtagCharacter) return null;
     index++;
   }
   if (value[index] !== '"') return null;
