@@ -5,7 +5,9 @@ export function scanPublicFileRoutes(
   root: string,
   configuredPublicDir: string | false = "public",
 ): string[] {
-  if (configuredPublicDir === false) return [];
+  // Vite normalizes `publicDir: false` to an empty string in resolved config.
+  // Treat both representations as disabled rather than scanning the project root.
+  if (configuredPublicDir === false || configuredPublicDir === "") return [];
   const publicDir = path.resolve(root, configuredPublicDir);
   const routes: string[] = [];
   const visitedDirs = new Set<string>();

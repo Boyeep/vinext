@@ -3804,7 +3804,12 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                 publicFiles:
                   isServeCommand && devPublicFileRoutes
                     ? [...devPublicFileRoutes].sort()
-                    : scanPublicFileRoutes(root, this.environment.config.publicDir),
+                    : scanPublicFileRoutes(
+                        root,
+                        this.environment.config.publicDir === ""
+                          ? false
+                          : this.environment.config.publicDir,
+                      ),
                 globalNotFoundPath,
                 draftModeSecret,
               },
@@ -4508,7 +4513,8 @@ export const loadServerActionClient = ${
           socket.on("error", () => {});
         });
 
-        const configuredPublicDir = server.config.publicDir as string | false;
+        const configuredPublicDir =
+          server.config.publicDir === "" ? false : (server.config.publicDir as string | false);
         const devPublicDir =
           configuredPublicDir === false
             ? null
@@ -4624,7 +4630,7 @@ export const loadServerActionClient = ${
           devPublicFileRoutes?.has(requestPathname) === true;
         const isUnsupportedDevPublicRequest = (
           req: import("node:http").IncomingMessage,
-          allowBasePathStripped = false,
+          pathnameState: "pre-base" | "post-base" = "pre-base",
         ): boolean => {
           if (req.method === "GET" || req.method === "HEAD") return false;
           let pathname: string;
@@ -4636,12 +4642,9 @@ export const loadServerActionClient = ${
             return false;
           }
           const basePath = nextConfig?.basePath ?? "";
-          if (basePath) {
-            if (hasBasePath(pathname, basePath)) {
-              pathname = stripBasePath(pathname, basePath);
-            } else if (!allowBasePathStripped) {
-              return false;
-            }
+          if (pathnameState === "pre-base" && basePath) {
+            if (!hasBasePath(pathname, basePath)) return false;
+            pathname = stripBasePath(pathname, basePath);
           }
           return isExistingDevPublicFile(pathname);
         };
@@ -4697,11 +4700,11 @@ export const loadServerActionClient = ${
             );
 
           // The patched Vite sirv middleware serves public files for every
-          // method. In an App-only project, let mutations pass through to the
-          // RSC request handler, which applies Next.js' middleware ->
-          // beforeFiles -> filesystem ordering and returns the canonical 405
-          // only if the resolved pathname is still a real public file.
-          if (hasAppDir && !hasPagesDir) {
+          // method. In App-only and Cloudflare dev projects, let mutations pass
+          // through to the framework request handler. App Router applies the
+          // canonical middleware -> beforeFiles -> filesystem ordering; the
+          // Cloudflare plugin delegates to the Worker/miniflare request path.
+          if ((hasAppDir && !hasPagesDir) || hasCloudflarePlugin) {
             const publicMiddlewareEntry = server.middlewares.stack.find(
               ({ handle }) =>
                 typeof handle === "function" && handle.name === "viteServePublicMiddleware",
@@ -4717,7 +4720,7 @@ export const loadServerActionClient = ${
               ) => {
                 // Vite's base middleware runs before its public middleware,
                 // so req.url may already have had nextConfig.basePath removed.
-                if (isUnsupportedDevPublicRequest(req, true)) return next();
+                if (isUnsupportedDevPublicRequest(req, "post-base")) return next();
                 return viteServePublic(req, res, next);
               };
               publicMiddlewareEntry.handle = vinextServePublicMiddleware;

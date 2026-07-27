@@ -2474,3 +2474,29 @@ describe("App Router custom publicDir in dev", () => {
     expect(defaultPublic.status).not.toBe(405);
   });
 });
+
+describe("App Router public files whose route starts with basePath in dev", () => {
+  let server: ViteDevServer;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    process.env.VINEXT_ENCODED_PATH_BASEPATH_I18N = "1";
+    try {
+      ({ server, baseUrl } = await startFixtureServer(APP_FIXTURE_DIR, { appRouter: true }));
+    } finally {
+      delete process.env.VINEXT_ENCODED_PATH_BASEPATH_I18N;
+    }
+  }, 30000);
+
+  afterAll(async () => {
+    await server?.close();
+  });
+
+  it("does not strip a coincidental basePath segment twice before mutation matching", async () => {
+    const res = await fetch(`${baseUrl}/docs/docs/coincidental-basepath.txt`, { method: "POST" });
+
+    expect(res.status).toBe(405);
+    expect(res.headers.get("allow")).toBe("GET, HEAD");
+    expect(await res.text()).toBe("Method Not Allowed");
+  });
+});

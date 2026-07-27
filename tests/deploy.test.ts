@@ -1253,6 +1253,8 @@ describe("scanPublicFileRoutes", () => {
 
     expect(scanPublicFileRoutes(tmpDir, "custom-public")).toEqual(["/custom.txt"]);
     expect(scanPublicFileRoutes(tmpDir, false)).toEqual([]);
+    // Vite's resolved config represents `publicDir: false` as an empty string.
+    expect(scanPublicFileRoutes(tmpDir, "")).toEqual([]);
   });
 });
 
