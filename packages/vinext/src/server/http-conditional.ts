@@ -7,13 +7,64 @@
 export function matchesIfNoneMatch(ifNoneMatch: string | undefined, etag: string): boolean {
   if (!ifNoneMatch) return false;
 
-  const normalizedEtag = stripWeakPrefix(etag);
-  return ifNoneMatch.split(",").some((candidate) => {
-    const trimmed = candidate.trim();
-    return trimmed === "*" || stripWeakPrefix(trimmed) === normalizedEtag;
-  });
+  const current = parseEntityTag(etag, 0);
+  if (!current || current.end !== etag.length) return false;
+  const currentOpaqueTag = etag.slice(current.opaqueStart, current.opaqueEnd);
+
+  let index = skipOptionalWhitespace(ifNoneMatch, 0);
+  if (ifNoneMatch[index] === "*") {
+    return skipOptionalWhitespace(ifNoneMatch, index + 1) === ifNoneMatch.length;
+  }
+
+  let matched = false;
+  let sawTag = false;
+  while (index < ifNoneMatch.length) {
+    // RFC 9110's list extension allows recipients to ignore empty members.
+    if (ifNoneMatch[index] === ",") {
+      index = skipOptionalWhitespace(ifNoneMatch, index + 1);
+      continue;
+    }
+
+    const candidate = parseEntityTag(ifNoneMatch, index);
+    if (!candidate) return false;
+    sawTag = true;
+    matched ||= ifNoneMatch.slice(candidate.opaqueStart, candidate.opaqueEnd) === currentOpaqueTag;
+
+    index = skipOptionalWhitespace(ifNoneMatch, candidate.end);
+    if (index === ifNoneMatch.length) break;
+    if (ifNoneMatch[index] !== ",") return false;
+    index = skipOptionalWhitespace(ifNoneMatch, index + 1);
+  }
+
+  return sawTag && matched;
 }
 
-function stripWeakPrefix(value: string): string {
-  return value.startsWith("W/") ? value.slice(2) : value;
+type ParsedEntityTag = {
+  opaqueStart: number;
+  opaqueEnd: number;
+  end: number;
+};
+
+function parseEntityTag(value: string, start: number): ParsedEntityTag | null {
+  let index = start;
+  if (value.startsWith("W/", index)) index += 2;
+  if (value[index] !== '"') return null;
+
+  const opaqueStart = ++index;
+  while (index < value.length && value[index] !== '"') {
+    const code = value.charCodeAt(index);
+    // etagc = %x21 / %x23-7E / obs-text. A backslash is an ordinary
+    // character here; entity tags do not use quoted-string escaping.
+    if (code !== 0x21 && (code < 0x23 || code > 0xff)) return null;
+    index++;
+  }
+  if (value[index] !== '"') return null;
+
+  return { opaqueStart, opaqueEnd: index, end: index + 1 };
+}
+
+function skipOptionalWhitespace(value: string, start: number): number {
+  let index = start;
+  while (value[index] === " " || value[index] === "\t") index++;
+  return index;
 }

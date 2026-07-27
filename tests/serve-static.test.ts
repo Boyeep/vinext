@@ -337,14 +337,15 @@ describe("tryServeStatic (with StaticFileCache)", () => {
 
   // ── 304 Not Modified (conditional requests) ────────────────────
 
-  it("returns 304 when If-None-Match matches the ETag", async () => {
+  it("returns 304 when a strong If-None-Match matches a weak ETag", async () => {
     await writeFile(clientDir, "_next/static/cached-aaa111.js", "cached content");
 
     const cache = await StaticFileCache.create(clientDir);
     const entry = cache.lookup("/_next/static/cached-aaa111.js");
     const etag = entry!.etag;
+    expect(etag).toMatch(/^W\//);
 
-    const req = mockReq(undefined, { "if-none-match": etag });
+    const req = mockReq(undefined, { "if-none-match": etag.slice(2) });
     const { res, captured } = mockRes();
 
     const served = await tryServeStatic(
@@ -422,6 +423,22 @@ describe("tryServeStatic (with StaticFileCache)", () => {
 
     await captured.ended;
     expect(captured.status).toBe(200);
+  });
+
+  it("rejects conditional requests with unsupported methods", async () => {
+    await writeFile(clientDir, "_next/static/method-aaa111.js", "cached content");
+
+    const cache = await StaticFileCache.create(clientDir);
+    const entry = cache.lookup("/_next/static/method-aaa111.js");
+    const req = mockReq(undefined, { "if-none-match": entry!.etag.slice(2) }, "POST");
+    const { res, captured } = mockRes();
+
+    await tryServeStatic(req, res, clientDir, "/_next/static/method-aaa111.js", true, cache);
+
+    await captured.ended;
+    expect(captured.status).toBe(405);
+    expect(captured.headers.Allow).toBe("GET, HEAD");
+    expect(captured.body.length).toBe(0);
   });
 
   it("304 response excludes Content-Type per RFC 9110", async () => {
@@ -751,6 +768,33 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     const served = await tryServeStatic(req, res, clientDir, "/nope.js", false);
 
     expect(served).toBe(false);
+  });
+
+  it("slow path rejects unsupported methods only after finding the file", async () => {
+    await writeFile(clientDir, "_next/static/method-slow-aaa111.js", "slow path content");
+
+    const req = mockReq(undefined, { "if-none-match": '"aaa111"' }, "PUT");
+    const { res, captured } = mockRes();
+
+    const served = await tryServeStatic(
+      req,
+      res,
+      clientDir,
+      "/_next/static/method-slow-aaa111.js",
+      false,
+    );
+
+    await captured.ended;
+    expect(served).toBe(true);
+    expect(captured.status).toBe(405);
+    expect(captured.headers.Allow).toBe("GET, HEAD");
+    expect(captured.body.length).toBe(0);
+
+    const missingReq = mockReq(undefined, undefined, "PUT");
+    const { res: missingRes } = mockRes();
+    expect(await tryServeStatic(missingReq, missingRes, clientDir, "/missing.js", false)).toBe(
+      false,
+    );
   });
 
   it("slow path serves HEAD without body", async () => {

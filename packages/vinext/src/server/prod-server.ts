@@ -591,6 +591,7 @@ async function tryServeStatic(
 
     const entry = cache.lookup(lookupPath);
     if (!entry) return false;
+    if (responseStatus === 200 && rejectUnsupportedStaticMethod(req, res)) return true;
 
     // Pick the best precompressed variant: zstd → br → gzip → original.
     // Each variant has pre-computed headers — zero string building.
@@ -680,6 +681,7 @@ async function tryServeStatic(
 
   const resolved = await resolveStaticFile(staticFile);
   if (!resolved) return false;
+  if (responseStatus === 200 && rejectUnsupportedStaticMethod(req, res)) return true;
 
   const ext = path.extname(resolved.path);
   const ct = CONTENT_TYPES[ext] ?? "application/octet-stream";
@@ -779,6 +781,13 @@ async function tryServeStatic(
       res.destroy(err);
     }
   });
+  return true;
+}
+
+function rejectUnsupportedStaticMethod(req: IncomingMessage, res: ServerResponse): boolean {
+  if (req.method === "GET" || req.method === "HEAD") return false;
+  res.writeHead(405, { Allow: "GET, HEAD" });
+  res.end();
   return true;
 }
 
