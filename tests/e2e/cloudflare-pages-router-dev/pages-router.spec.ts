@@ -44,6 +44,15 @@ test.describe("Pages Router on Cloudflare Workers (vite dev)", () => {
     expect(await res.text()).toBe("Method Not Allowed");
   });
 
+  test("encoded public-file mutations are handled inside the Cloudflare Worker", async ({
+    request,
+  }) => {
+    const res = await request.post(`${BASE}/hello%20copy.txt`);
+
+    expect(res.status()).toBe(405);
+    expect(res.headers()["allow"]).toBe("GET, HEAD");
+  });
+
   test("GSSP runs inside the Cloudflare Worker", async ({ request }) => {
     // getServerSideProps on /ssr reads navigator.userAgent and embeds it in
     // the rendered HTML. "Cloudflare-Workers" can only appear if GSSP executed

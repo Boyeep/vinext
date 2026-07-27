@@ -242,6 +242,7 @@ import { createWasmModuleImportPlugin } from "./plugins/wasm-module-import.js";
 import { getTypeofWindowReplacement, replaceTypeofWindow } from "./plugins/typeof-window.js";
 import { hasMdxFiles } from "./utils/mdx-scan.js";
 import { scanPublicFileRoutes } from "./utils/public-routes.js";
+import { publicFilePathVariants } from "./utils/public-file-path.js";
 import { methodNotAllowedResponse } from "./server/http-error-responses.js";
 import type { Options as VitePluginReactOptions } from "@vitejs/plugin-react";
 import MagicString from "magic-string";
@@ -4527,7 +4528,7 @@ export const loadServerActionClient = ${
             ? null
             : path.resolve(toSlash(server.config.root), toSlash(configuredPublicDir));
         devPublicFileRoutes = new Set(scanPublicFileRoutes(root, configuredPublicDir));
-        const publicRouteForFile = (filePath: string): string | null => {
+        const publicRoutesForFile = (filePath: string): string[] | null => {
           if (devPublicDir === null) return null;
           const cleanPath = toSlash(stripViteModuleQuery(filePath));
           const relativePath = path.relative(devPublicDir, cleanPath);
@@ -4538,17 +4539,22 @@ export const loadServerActionClient = ${
           ) {
             return null;
           }
-          return `/${relativePath}`;
+          return publicFilePathVariants(`/${relativePath}`);
         };
         const updatePublicFileRoute = (filePath: string, present: boolean): void => {
-          const route = publicRouteForFile(filePath);
-          if (route === null || devPublicFileRoutes === null) return;
-          const changed = present
-            ? !devPublicFileRoutes.has(route)
-            : devPublicFileRoutes.has(route);
+          const routes = publicRoutesForFile(filePath);
+          if (routes === null || devPublicFileRoutes === null) return;
+          let changed = false;
+          for (const route of routes) {
+            const routeChanged = present
+              ? !devPublicFileRoutes.has(route)
+              : devPublicFileRoutes.has(route);
+            if (!routeChanged) continue;
+            changed = true;
+            if (present) devPublicFileRoutes.add(route);
+            else devPublicFileRoutes.delete(route);
+          }
           if (!changed) return;
-          if (present) devPublicFileRoutes.add(route);
-          else devPublicFileRoutes.delete(route);
           if (hasAppDir) invalidateRscEntryModule();
           if (hasCloudflarePlugin && hasPagesDir && !hasAppDir) invalidatePagesServerEntry();
         };

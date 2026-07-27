@@ -2305,13 +2305,13 @@ describe("App Router route-miss root layout redirects", () => {
     const filePath = path.join(
       ROOT_LAYOUT_NOT_FOUND_REDIRECT_FIXTURE_DIR,
       "public",
-      "watcher-added.txt",
+      "watcher added.txt",
     );
 
     await fsp.writeFile(filePath, "watcher-added", "utf8");
     server.watcher.emit("add", filePath);
     try {
-      const added = await fetch(`${baseUrl}/watcher-added.txt`, { method: "POST" });
+      const added = await fetch(`${baseUrl}/watcher%20added.txt`, { method: "POST" });
       expect(added.status).toBe(405);
       expect(added.headers.get("allow")).toBe("GET, HEAD");
     } finally {
@@ -2319,7 +2319,7 @@ describe("App Router route-miss root layout redirects", () => {
       server.watcher.emit("unlink", filePath);
     }
 
-    const removed = await fetch(`${baseUrl}/watcher-added.txt`, { method: "POST" });
+    const removed = await fetch(`${baseUrl}/watcher%20added.txt`, { method: "POST" });
     expect(removed.status).not.toBe(405);
   });
 

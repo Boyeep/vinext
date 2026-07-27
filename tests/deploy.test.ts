@@ -1256,6 +1256,22 @@ describe("scanPublicFileRoutes", () => {
     // Vite's resolved config represents `publicDir: false` as an empty string.
     expect(scanPublicFileRoutes(tmpDir, "")).toEqual([]);
   });
+
+  // Ported from Next.js: test/e2e/dynamic-routing/shared.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/dynamic-routing/shared.ts
+  it("stores public-file routes with URL-encoded path segments", () => {
+    writeFile(tmpDir, "public/hello copy.txt", "space");
+    writeFile(tmpDir, "public/hello+copy.txt", "plus");
+    writeFile(tmpDir, "public/hello%20copy.txt", "percent");
+
+    expect(scanPublicFileRoutes(tmpDir)).toEqual([
+      "/hello copy.txt",
+      "/hello%20copy.txt",
+      "/hello%2520copy.txt",
+      "/hello%2Bcopy.txt",
+      "/hello+copy.txt",
+    ]);
+  });
 });
 
 describe("readPagesRouterEntrySource", () => {
@@ -1954,6 +1970,40 @@ describe("fetchWorkerFilesystemRoute", () => {
       ),
     ).resolves.toBe(false);
     expect(fetchAsset).not.toHaveBeenCalled();
+  });
+
+  it.each(["/hello%20copy.txt", "/hello copy.txt"])(
+    "matches encoded public-file inventory for %s",
+    async (requestPathname) => {
+      const fetchAsset = vi.fn(async () => new Response(null, { status: 200 }));
+
+      const result = await fetchWorkerFilesystemRoute(
+        new Request("https://example.com/hello%20copy.txt", { method: "POST" }),
+        requestPathname,
+        "direct",
+        fetchAsset,
+        new Set(["/hello copy.txt", "/hello%20copy.txt"]),
+      );
+
+      expect(result).toBeInstanceOf(Response);
+      expect(fetchAsset).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("still probes direct built assets outside the public-file inventory", async () => {
+    const fetchAsset = vi.fn(async () => new Response(null, { status: 200 }));
+
+    const result = await fetchWorkerFilesystemRoute(
+      new Request("https://example.com/_next/static/chunks/app.js", { method: "POST" }),
+      "/_next/static/chunks/app.js",
+      "direct",
+      fetchAsset,
+      new Set(),
+      true,
+    );
+
+    expect(result).toBeInstanceOf(Response);
+    expect(fetchAsset).toHaveBeenCalledOnce();
   });
 
   it("skips direct and API filesystem probes", async () => {

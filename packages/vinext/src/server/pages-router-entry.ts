@@ -223,6 +223,7 @@ async function handleRequest(
           phase,
           (assetRequest) => Promise.resolve(env.ASSETS!.fetch(assetRequest)),
           publicFiles,
+          missingBuildAsset,
         );
       },
     };
