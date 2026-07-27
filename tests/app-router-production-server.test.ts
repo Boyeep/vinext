@@ -451,6 +451,13 @@ describe("App Router Production server (startProdServer)", () => {
     expect(failed.headers["content-range"]).toBeUndefined();
     expect(failed.body).toHaveLength(0);
 
+    expect(etag).toMatch(/^W\//);
+    const matchingIfMatch = await rawHttpRequest(assetUrl, {
+      headers: { "If-Match": etag },
+    });
+    expect(matchingIfMatch.status).toBe(200);
+    expect(matchingIfMatch.body).toEqual(full.body);
+
     const range = await rawHttpRequest(assetUrl, {
       headers: {
         "If-Match": "*",

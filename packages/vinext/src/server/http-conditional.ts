@@ -41,7 +41,7 @@ export function matchesIfNoneMatch(ifNoneMatch: string | undefined, etag: string
   return sawTag && matched;
 }
 
-/** Test an If-Match field using RFC 9110's strong entity-tag comparison. */
+/** Test an If-Match field using Next.js's weak/strong-equivalent comparison. */
 export function matchesIfMatch(ifMatch: string | undefined, etag: string | undefined): boolean {
   if (!ifMatch) return false;
 
@@ -52,7 +52,7 @@ export function matchesIfMatch(ifMatch: string | undefined, etag: string | undef
 
   if (!etag) return false;
   const current = parseEntityTag(etag, 0);
-  if (!current || current.end !== etag.length || current.weak) return false;
+  if (!current || current.end !== etag.length) return false;
   const currentOpaqueTag = etag.slice(current.opaqueStart, current.opaqueEnd);
 
   let matched = false;
@@ -66,9 +66,7 @@ export function matchesIfMatch(ifMatch: string | undefined, etag: string | undef
     const candidate = parseEntityTag(ifMatch, index);
     if (!candidate) return false;
     sawTag = true;
-    matched ||=
-      !candidate.weak &&
-      ifMatch.slice(candidate.opaqueStart, candidate.opaqueEnd) === currentOpaqueTag;
+    matched ||= ifMatch.slice(candidate.opaqueStart, candidate.opaqueEnd) === currentOpaqueTag;
 
     index = skipOptionalWhitespace(ifMatch, candidate.end);
     if (index === ifMatch.length) break;

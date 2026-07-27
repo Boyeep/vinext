@@ -73,10 +73,12 @@ describe("matchesIfNoneMatch", () => {
 });
 
 describe("matchesIfMatch", () => {
-  it("uses strong comparison for entity tags", () => {
+  it("matches weak and strong variants like Next.js static serving", () => {
     expect(matchesIfMatch('"asset"', '"asset"')).toBe(true);
-    expect(matchesIfMatch('W/"asset"', '"asset"')).toBe(false);
-    expect(matchesIfMatch('"asset"', 'W/"asset"')).toBe(false);
+    expect(matchesIfMatch('W/"asset"', '"asset"')).toBe(true);
+    expect(matchesIfMatch('"asset"', 'W/"asset"')).toBe(true);
+    expect(matchesIfMatch('W/"asset"', 'W/"asset"')).toBe(true);
+    expect(matchesIfMatch('W/"other"', 'W/"asset"')).toBe(false);
   });
 
   it("matches strong tags containing commas inside a list", () => {
