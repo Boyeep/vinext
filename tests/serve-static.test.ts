@@ -133,12 +133,19 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     const req = mockReq(undefined, undefined, "DELETE");
     const { res, captured } = mockRes();
 
-    const served = await tryServeStatic(req, res, clientDir, "/robots.txt", true);
+    const served = await tryServeStatic(req, res, clientDir, "/robots.txt", true, undefined, {
+      "X-From-Middleware": "preserved",
+      "Set-Cookie": ["a=1", "b=2"],
+      "Content-Type": "application/wrong",
+    });
     await captured.ended;
 
     expect(served).toBe(true);
     expect(captured.status).toBe(405);
     expect(captured.headers.Allow).toBe("GET, HEAD");
+    expect(captured.headers["X-From-Middleware"]).toBe("preserved");
+    expect(captured.headers["Set-Cookie"]).toEqual(["a=1", "b=2"]);
+    expect(captured.headers["Content-Type"]).toBe("text/plain; charset=utf-8");
     expect(captured.body.toString()).toBe("Method Not Allowed");
   });
 

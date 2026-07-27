@@ -419,10 +419,21 @@ function matchesIfNoneMatchHeader(ifNoneMatch: string | undefined, etag: string)
     .some((value) => value === etag);
 }
 
-function rejectUnsupportedStaticMethod(req: IncomingMessage, res: ServerResponse): boolean {
+const OMIT_METHOD_NOT_ALLOWED_HEADERS: ReadonlySet<string> = new Set([
+  "allow",
+  "content-length",
+  "content-type",
+]);
+
+function rejectUnsupportedStaticMethod(
+  req: IncomingMessage,
+  res: ServerResponse,
+  extraHeaders?: Record<string, string | string[]>,
+): boolean {
   if (req.method === "GET" || req.method === "HEAD") return false;
   const body = "Method Not Allowed";
   res.writeHead(405, {
+    ...omitHeadersCaseInsensitive(extraHeaders ?? {}, OMIT_METHOD_NOT_ALLOWED_HEADERS),
     Allow: "GET, HEAD",
     "Content-Type": "text/plain; charset=utf-8",
     "Content-Length": String(Buffer.byteLength(body)),
@@ -611,7 +622,7 @@ async function tryServeStatic(
 
     const entry = cache.lookup(lookupPath);
     if (!entry) return false;
-    if (rejectUnsupportedStaticMethod(req, res)) return true;
+    if (rejectUnsupportedStaticMethod(req, res, extraHeaders)) return true;
 
     // Pick the best precompressed variant: zstd → br → gzip → original.
     // Each variant has pre-computed headers — zero string building.
@@ -701,7 +712,7 @@ async function tryServeStatic(
 
   const resolved = await resolveStaticFile(staticFile);
   if (!resolved) return false;
-  if (rejectUnsupportedStaticMethod(req, res)) return true;
+  if (rejectUnsupportedStaticMethod(req, res, extraHeaders)) return true;
 
   const ext = path.extname(resolved.path);
   const ct = CONTENT_TYPES[ext] ?? "application/octet-stream";

@@ -242,6 +242,7 @@ import { createWasmModuleImportPlugin } from "./plugins/wasm-module-import.js";
 import { getTypeofWindowReplacement, replaceTypeofWindow } from "./plugins/typeof-window.js";
 import { hasMdxFiles } from "./utils/mdx-scan.js";
 import { scanPublicFileRoutes } from "./utils/public-routes.js";
+import { methodNotAllowedResponse } from "./server/http-error-responses.js";
 import type { Options as VitePluginReactOptions } from "@vitejs/plugin-react";
 import MagicString from "magic-string";
 import path, { toSlash } from "pathslash";
@@ -4572,6 +4573,25 @@ export const loadServerActionClient = ${
           }
         });
 
+        type DevPagesMiddleware = (
+          req: import("node:http").IncomingMessage,
+          res: import("node:http").ServerResponse,
+          next: (error?: unknown) => void,
+        ) => Promise<void>;
+        let handlePagesMiddleware: DevPagesMiddleware | null = null;
+        const devPublicDir = server.config.publicDir
+          ? path.resolve(toSlash(server.config.root), toSlash(server.config.publicDir))
+          : path.resolve(toSlash(server.config.root), "public");
+        const isExistingDevPublicFile = (requestPathname: string): boolean => {
+          const candidate = path.resolve(devPublicDir, `.${requestPathname}`);
+          if (!candidate.startsWith(`${devPublicDir}/`)) return false;
+          try {
+            return fs.statSync(candidate).isFile();
+          } catch {
+            return false;
+          }
+        };
+
         // ── Dev request origin check ─────────────────────────────────────
         // Registered directly (not in the returned function) so it runs
         // BEFORE Vite's built-in middleware. This ensures all requests
@@ -4595,6 +4615,35 @@ export const loadServerActionClient = ${
             return;
           }
           next();
+        });
+
+        // Vite serves public files for every method. Intercept only mutations
+        // to known public files before Vite's internals, then run the canonical
+        // Pages pipeline so config/middleware ordering and headers are retained.
+        server.middlewares.use((req, res, next) => {
+          if (
+            !hasPagesDir ||
+            req.method === "GET" ||
+            req.method === "HEAD" ||
+            !handlePagesMiddleware
+          ) {
+            return next();
+          }
+          let pathname: string;
+          try {
+            pathname = normalizePathnameForRouteMatchStrict(
+              new URL(req.url ?? "/", "http://vinext.invalid").pathname,
+            );
+          } catch {
+            return next();
+          }
+          const basePath = nextConfig?.basePath ?? "";
+          if (basePath) {
+            if (!hasBasePath(pathname, basePath)) return next();
+            pathname = stripBasePath(pathname, basePath);
+          }
+          if (!isExistingDevPublicFile(pathname)) return next();
+          void handlePagesMiddleware(req, res, next);
         });
 
         installDevStackSourcemapMiddleware(server);
@@ -4826,7 +4875,7 @@ export const loadServerActionClient = ${
             });
           }
 
-          const handlePagesMiddleware = async (
+          handlePagesMiddleware = async (
             req: import("node:http").IncomingMessage,
             res: import("node:http").ServerResponse,
             next: (err?: unknown) => void,
@@ -5126,6 +5175,8 @@ export const loadServerActionClient = ${
                 }),
               );
               const isFilePathRequest = pathname.includes(".") && !pathname.endsWith(".html");
+              const isExistingPublicMutation =
+                req.method !== "GET" && req.method !== "HEAD" && isExistingDevPublicFile(pathname);
               let filePathMatchesPagesRoute = false;
               const requestHostname = getUrlHostname(requestOrigin);
               if (isFilePathRequest && !filePathMatchesRewrite) {
@@ -5150,7 +5201,12 @@ export const loadServerActionClient = ${
                   matchRoute(pageRouteUrl, pageRoutes) !== null ||
                   matchRoute(apiRouteUrl, apiRoutes) !== null;
               }
-              if (isFilePathRequest && !filePathMatchesRewrite && !filePathMatchesPagesRoute) {
+              if (
+                isFilePathRequest &&
+                !filePathMatchesRewrite &&
+                !filePathMatchesPagesRoute &&
+                !isExistingPublicMutation
+              ) {
                 return next();
               }
 
@@ -5356,14 +5412,19 @@ export const loadServerActionClient = ${
                   return proxyExternalRequest(reqWithBody, externalUrl);
                 },
                 serveFilesystemRoute: async (requestPathname, stagedHeaders, phase) => {
+                  const isRetrievalMethod = req.method === "GET" || req.method === "HEAD";
                   if (
-                    phase === "direct" ||
-                    (req.method !== "GET" && req.method !== "HEAD") ||
+                    (phase === "direct" && isRetrievalMethod) ||
                     requestPathname === "/" ||
                     requestPathname === "/api" ||
                     requestPathname.startsWith("/api/")
                   ) {
                     return false;
+                  }
+                  if (!isRetrievalMethod) {
+                    return isExistingDevPublicFile(requestPathname)
+                      ? methodNotAllowedResponse("GET, HEAD")
+                      : false;
                   }
                   return serveRewrittenViteFilesystemRoute(
                     req,
@@ -5544,7 +5605,7 @@ export const loadServerActionClient = ${
           };
 
           server.middlewares.use((req, res, next) => {
-            void handlePagesMiddleware(req, res, next);
+            void handlePagesMiddleware!(req, res, next);
           });
         };
       },

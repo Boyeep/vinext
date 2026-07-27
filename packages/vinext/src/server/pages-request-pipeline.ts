@@ -39,6 +39,7 @@ import { mergeRewriteQuery } from "../utils/query.js";
 import { addBasePathToPathname, hasBasePath } from "../utils/base-path.js";
 import { patternToNextFormat } from "../routing/route-validation.js";
 import { isOnDemandRevalidateRequest, PRERENDER_REVALIDATE_HEADER } from "./isr-cache.js";
+import { methodNotAllowedResponse } from "./http-error-responses.js";
 
 // All "render options" that are passed through to the renderPage callback
 export type PagesRenderOptions = {
@@ -59,9 +60,9 @@ export async function fetchWorkerFilesystemRoute(
   phase: FilesystemRoutePhase,
   fetchAsset: (request: Request) => Promise<Response>,
 ): Promise<Response | false> {
+  const isRetrievalMethod = request.method === "GET" || request.method === "HEAD";
   if (
-    phase === "direct" ||
-    (request.method !== "GET" && request.method !== "HEAD") ||
+    (phase === "direct" && isRetrievalMethod) ||
     requestPathname === "/api" ||
     requestPathname.startsWith("/api/")
   ) {
@@ -70,8 +71,19 @@ export async function fetchWorkerFilesystemRoute(
   const assetUrl = new URL(request.url);
   assetUrl.pathname = requestPathname;
   assetUrl.search = "";
-  const response = await fetchAsset(new Request(assetUrl, request));
-  return response.status === 404 ? false : response;
+  // Never forward a mutating method or body to the asset binding. A HEAD probe
+  // establishes existence without reading the asset body; only a real asset is
+  // then converted to the framework's deterministic 405 response.
+  const assetRequest = isRetrievalMethod
+    ? new Request(assetUrl, request)
+    : new Request(assetUrl, { method: "HEAD", headers: request.headers });
+  const response = await fetchAsset(assetRequest);
+  if (response.status === 404) return false;
+  if (!isRetrievalMethod) {
+    if (response.body && !response.body.locked) void response.body.cancel();
+    return methodNotAllowedResponse("GET, HEAD");
+  }
+  return response;
 }
 
 export type MiddlewareResult = {

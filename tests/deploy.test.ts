@@ -1834,6 +1834,53 @@ describe("fetchWorkerFilesystemRoute", () => {
     expect(fetchAsset).toHaveBeenCalledOnce();
   });
 
+  it.each(["POST", "DELETE"])(
+    "uses a bodyless HEAD probe before returning 405 for an existing asset on %s",
+    async (method) => {
+      const fetchAsset = vi.fn(async (request: Request) => {
+        expect(request.method).toBe("HEAD");
+        expect(request.body).toBeNull();
+        return new Response(null, { status: 200 });
+      });
+
+      const sourceRequest =
+        method === "POST"
+          ? new Request("https://example.com/file.txt", {
+              method: "POST",
+              body: "must-not-forward",
+            })
+          : new Request("https://example.com/file.txt", { method: "DELETE" });
+      const result = await fetchWorkerFilesystemRoute(
+        sourceRequest,
+        "/file.txt",
+        "direct",
+        fetchAsset,
+      );
+
+      expect(result).toBeInstanceOf(Response);
+      if (!(result instanceof Response)) return;
+      expect(result.status).toBe(405);
+      expect(result.headers.get("allow")).toBe("GET, HEAD");
+      await expect(result.text()).resolves.toBe("Method Not Allowed");
+    },
+  );
+
+  it("falls through after a HEAD probe misses for an unsupported method", async () => {
+    const fetchAsset = vi.fn(async (request: Request) => {
+      expect(request.method).toBe("HEAD");
+      return new Response(null, { status: 404 });
+    });
+
+    await expect(
+      fetchWorkerFilesystemRoute(
+        new Request("https://example.com/missing.txt", { method: "POST" }),
+        "/missing.txt",
+        "direct",
+        fetchAsset,
+      ),
+    ).resolves.toBe(false);
+  });
+
   it("skips direct and API filesystem probes", async () => {
     const fetchAsset = vi.fn(async () => new Response("unexpected"));
 

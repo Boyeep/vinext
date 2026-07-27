@@ -749,6 +749,25 @@ describe("Pages Router integration", () => {
     expect(await res.text()).toContain("Method Not Allowed");
   });
 
+  it("returns 405 for an existing public file after middleware, but lets misses route", async () => {
+    const get = await fetch(`${baseUrl}/dedupe-script.js`);
+    expect(get.status).toBe(200);
+    expect(await get.text()).toContain("window.__vinextScriptDedupeExecutions");
+
+    const head = await fetch(`${baseUrl}/dedupe-script.js`, { method: "HEAD" });
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
+
+    const existing = await fetch(`${baseUrl}/dedupe-script.js`, { method: "POST" });
+    expect(existing.status).toBe(405);
+    expect(existing.headers.get("allow")).toBe("GET, HEAD");
+    expect(existing.headers.get("x-custom-middleware")).toBe("active");
+    expect(await existing.text()).toBe("Method Not Allowed");
+
+    const missing = await fetch(`${baseUrl}/missing-public-file.js`, { method: "POST" });
+    expect(missing.status).not.toBe(405);
+  });
+
   // Refs #1463: GSP (getStaticProps) pages are also "static" from the
   // routing perspective; POST should produce 405. Mirrors the Next.js
   // condition `(typeof components.Component === 'string' || isSSG)` in

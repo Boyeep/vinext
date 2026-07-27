@@ -304,19 +304,24 @@ describe("resolvePublicFileRoute", () => {
     expect(response!.headers.get("x-from-middleware")).toBe("1");
   });
 
-  it("signals existing public files regardless of method, but excludes RSC and missing files", () => {
+  it("returns 405 for unsupported methods only after a public file match", async () => {
     const publicFiles = new Set(["/logo.svg", "/about.rsc"]);
     const middlewareContext = { headers: null, status: null };
 
-    expect(
-      resolvePublicFileRoute({
-        cleanPathname: "/logo.svg",
-        middlewareContext,
-        pathname: "/logo.svg",
-        publicFiles,
-        request: new Request("https://example.com/logo.svg", { method: "POST" }),
-      })?.headers.get("x-vinext-static-file"),
-    ).toBe("%2Flogo.svg");
+    const mutationResponse = resolvePublicFileRoute({
+      cleanPathname: "/logo.svg",
+      middlewareContext: {
+        headers: new Headers({ "x-from-middleware": "1" }),
+        status: null,
+      },
+      pathname: "/logo.svg",
+      publicFiles,
+      request: new Request("https://example.com/logo.svg", { method: "POST" }),
+    });
+    expect(mutationResponse?.status).toBe(405);
+    expect(mutationResponse?.headers.get("allow")).toBe("GET, HEAD");
+    expect(mutationResponse?.headers.get("x-from-middleware")).toBe("1");
+    await expect(mutationResponse?.text()).resolves.toBe("Method Not Allowed");
     expect(
       resolvePublicFileRoute({
         cleanPathname: "/about.rsc",
