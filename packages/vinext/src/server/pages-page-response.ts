@@ -62,13 +62,6 @@ export function generatePagesETag(payload: string): string {
 }
 
 /**
- * Mirrors Next.js `sendEtagResponse` semantics (weak/strong comparison).
- */
-export function etagMatches(etag: string, ifNoneMatch: string): boolean {
-  return matchesIfNoneMatch(ifNoneMatch, etag);
-}
-
-/**
  * Returns true when a request `Cache-Control` header asks to bypass the 304
  * short-circuit. Mirrors the `fresh` package's check used by Next.js's
  * `sendEtagResponse` (`/(?:^|,)\s*?no-cache\s*?(?:,|$)/`). Shared by the
@@ -754,7 +747,7 @@ export async function renderPagesPageResponse(
     const etag = generatePagesETag(fullHtml);
     responseHeaders.set("ETag", etag);
     const noCacheRequested = requestsNoCache(options.requestCacheControl);
-    if (!noCacheRequested && options.ifNoneMatch && etagMatches(etag, options.ifNoneMatch)) {
+    if (!noCacheRequested && options.ifNoneMatch && matchesIfNoneMatch(options.ifNoneMatch, etag)) {
       return new Response(null, {
         status: 304,
         headers: responseHeaders,
