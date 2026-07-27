@@ -16,6 +16,10 @@ import zlib from "node:zlib";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { ASSET_PREFIX_URL_DIR } from "../utils/asset-prefix.js";
+import {
+  isPrecompressedVariantBeneficial,
+  type PrecompressedEncoding,
+} from "../utils/precompressed-variant.js";
 
 const brotliCompress = promisify(zlib.brotliCompress);
 const gzip = promisify(zlib.gzip);
@@ -154,10 +158,10 @@ export async function precompressAssets(
         const [brContent, gzContent, zstdContent] = results;
 
         const outcomes = await Promise.all([
-          writeBeneficialVariant(fullPath + ".br", brContent, content.length),
-          writeBeneficialVariant(fullPath + ".gz", gzContent, content.length),
+          writeBeneficialVariant(fullPath + ".br", brContent, content.length, "br"),
+          writeBeneficialVariant(fullPath + ".gz", gzContent, content.length, "gzip"),
           zstdContent
-            ? writeBeneficialVariant(fullPath + ".zst", zstdContent, content.length)
+            ? writeBeneficialVariant(fullPath + ".zst", zstdContent, content.length, "zstd")
             : removeFileIfPresent(fullPath + ".zst").then(() => false),
         ]);
 
@@ -185,8 +189,9 @@ async function writeBeneficialVariant(
   destination: string,
   compressed: Buffer,
   originalSize: number,
+  encoding: PrecompressedEncoding,
 ): Promise<boolean> {
-  if (compressed.length >= originalSize) {
+  if (!isPrecompressedVariantBeneficial(compressed.length, originalSize, encoding)) {
     await removeFileIfPresent(destination);
     return false;
   }

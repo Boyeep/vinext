@@ -13,6 +13,7 @@ import os from "node:os";
 import zlib from "node:zlib";
 import { createHash } from "node:crypto";
 import { precompressAssets } from "../packages/vinext/src/build/precompress.js";
+import { isPrecompressedVariantBeneficial } from "../packages/vinext/src/utils/precompressed-variant.js";
 
 /** Write a file with repeated content to ensure it exceeds compression threshold. */
 async function writeAsset(
@@ -108,6 +109,22 @@ describe("precompressAssets", () => {
     expect(fs.existsSync(path.join(clientDir, "_next/static/random-aaa111.wasm.br"))).toBe(false);
     expect(fs.existsSync(path.join(clientDir, "_next/static/random-aaa111.wasm.gz"))).toBe(false);
     expect(fs.existsSync(path.join(clientDir, "_next/static/random-aaa111.wasm.zst"))).toBe(false);
+  });
+
+  it("does not emit a marginally smaller representation with larger wire overhead", async () => {
+    const content = deterministicHighEntropyBytes(4096);
+    content.copy(content, content.length - 48, 0, 48);
+    const brotli = zlib.brotliCompressSync(content, {
+      params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 },
+    });
+    expect(brotli.length).toBeLessThan(content.length);
+    expect(isPrecompressedVariantBeneficial(brotli.length, content.length, "br")).toBe(false);
+
+    const relativePath = "_next/static/marginal-aaa111.wasm";
+    await writeAsset(clientDir, relativePath, content);
+    await precompressAssets(clientDir);
+
+    expect(fs.existsSync(path.join(clientDir, relativePath + ".br"))).toBe(false);
   });
 
   it("removes obsolete compressed representations on a later run", async () => {
@@ -286,4 +303,18 @@ describe("precompressAssets", () => {
     expect(result.totalBrotliBytes).toBeGreaterThan(0);
     expect(result.totalBrotliBytes).toBeLessThan(result.totalOriginalBytes);
   });
+});
+
+describe("isPrecompressedVariantBeneficial", () => {
+  it.each([
+    ["br", 45],
+    ["gzip", 47],
+    ["zstd", 47],
+  ] as const)(
+    "requires %s to save more than its response-header overhead",
+    (encoding, overhead) => {
+      expect(isPrecompressedVariantBeneficial(1000 - overhead, 1000, encoding)).toBe(false);
+      expect(isPrecompressedVariantBeneficial(999 - overhead, 1000, encoding)).toBe(true);
+    },
+  );
 });

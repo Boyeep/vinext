@@ -100,6 +100,19 @@ describe("StaticFileCache", () => {
     expect(entry?.original.headers.Vary).toBeUndefined();
   });
 
+  it("ignores variants whose savings do not cover response-header overhead", async () => {
+    await writeFile(clientDir, "_next/static/app-abc123.js", "x".repeat(1000));
+    await writeFile(clientDir, "_next/static/app-abc123.js.br", "y".repeat(955));
+    await writeFile(clientDir, "_next/static/app-abc123.js.gz", "z".repeat(953));
+
+    const cache = await StaticFileCache.create(clientDir);
+    const entry = cache.lookup("/_next/static/app-abc123.js");
+
+    expect(entry?.br).toBeUndefined();
+    expect(entry?.gz).toBeUndefined();
+    expect(entry?.original.headers.Vary).toBeUndefined();
+  });
+
   it("sets immutable cache-control for hashed assets under /assets/", async () => {
     await writeFile(clientDir, "_next/static/bundle-abc123.js", "x".repeat(100));
 

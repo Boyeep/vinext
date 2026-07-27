@@ -14,6 +14,7 @@
 import fsp from "node:fs/promises";
 import path, { toSlash } from "pathslash";
 import { ASSET_PREFIX_URL_DIR } from "../utils/asset-prefix.js";
+import { isPrecompressedVariantBeneficial } from "../utils/precompressed-variant.js";
 
 /** Content-type lookup for static assets. Shared with prod-server.ts. */
 export const CONTENT_TYPES: Record<string, string> = {
@@ -164,17 +165,17 @@ export class StaticFileCache {
 
       // Pre-compute compressed variant headers (with Content-Encoding, Vary, correct Content-Length)
       const brInfo = allFiles.get(relativePath + ".br");
-      if (brInfo && brInfo.size < fileInfo.size) {
+      if (brInfo && isPrecompressedVariantBeneficial(brInfo.size, fileInfo.size, "br")) {
         entry.br = buildVariant(brInfo, baseHeaders, "br");
       }
 
       const gzInfo = allFiles.get(relativePath + ".gz");
-      if (gzInfo && gzInfo.size < fileInfo.size) {
+      if (gzInfo && isPrecompressedVariantBeneficial(gzInfo.size, fileInfo.size, "gzip")) {
         entry.gz = buildVariant(gzInfo, baseHeaders, "gzip");
       }
 
       const zstInfo = allFiles.get(relativePath + ".zst");
-      if (zstInfo && zstInfo.size < fileInfo.size) {
+      if (zstInfo && isPrecompressedVariantBeneficial(zstInfo.size, fileInfo.size, "zstd")) {
         entry.zst = buildVariant(zstInfo, baseHeaders, "zstd");
       }
 
