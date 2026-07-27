@@ -113,6 +113,16 @@ describe("StaticFileCache", () => {
     expect(entry?.original.headers.Vary).toBeUndefined();
   });
 
+  it("does not serve temporary files left by interrupted precompression", async () => {
+    const temporaryPath =
+      "_next/static/app-abc123.js.br.123.123e4567-e89b-42d3-a456-426614174000.tmp";
+    await writeFile(clientDir, temporaryPath, "partial compressed content");
+
+    const cache = await StaticFileCache.create(clientDir);
+
+    expect(cache.lookup("/" + temporaryPath)).toBeUndefined();
+  });
+
   it("sets immutable cache-control for hashed assets under /assets/", async () => {
     await writeFile(clientDir, "_next/static/bundle-abc123.js", "x".repeat(100));
 

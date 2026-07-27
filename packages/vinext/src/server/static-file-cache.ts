@@ -48,6 +48,10 @@ export const CONTENT_TYPES: Record<string, string> = {
  */
 const BUFFER_THRESHOLD = 64 * 1024;
 
+/** Temp files left by an interrupted atomic precompression write. */
+const PRECOMPRESSION_TEMP_FILE_RE =
+  /\.(?:br|gz|zst)\.\d+\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/i;
+
 /** A servable file variant with pre-computed response headers. */
 type FileVariant = {
   /** Absolute file path (used for streaming large files). */
@@ -114,6 +118,10 @@ export class StaticFileCache {
         relativePath.endsWith(".zst")
       )
         continue;
+
+      // A hard process exit can strand the temporary side of an atomic
+      // precompression write. Never register that internal artifact as a URL.
+      if (PRECOMPRESSION_TEMP_FILE_RE.test(relativePath)) continue;
 
       // Skip .vite/ internal directory
       if (relativePath.startsWith(".vite/") || relativePath === ".vite") continue;
