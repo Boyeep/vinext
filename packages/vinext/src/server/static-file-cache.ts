@@ -79,6 +79,8 @@ type FileVariant = {
 type StaticFileEntry = {
   /** Weak ETag for conditional request matching. */
   etag: string;
+  /** Original file modification time for If-Range date validation. */
+  mtimeMs: number;
   /** Pre-computed headers for 304 Not Modified response. */
   notModifiedHeaders: Record<string, string>;
   /** Original file variant (uncompressed). */
@@ -160,10 +162,12 @@ export class StaticFileCache {
         `W/"${fileInfo.size}-${Math.floor(fileInfo.mtimeMs / 1000)}"`;
 
       // Base headers shared by all variants (Content-Type, Cache-Control, ETag)
+      const lastModified = new Date(fileInfo.mtimeMs).toUTCString();
       const baseHeaders = {
         "Content-Type": contentType,
         "Cache-Control": cacheControl,
         ETag: etag,
+        "Last-Modified": lastModified,
       };
 
       // Pre-compute original variant headers
@@ -175,7 +179,12 @@ export class StaticFileCache {
 
       const entry: StaticFileEntry = {
         etag,
-        notModifiedHeaders: { ETag: etag, "Cache-Control": cacheControl },
+        mtimeMs: fileInfo.mtimeMs,
+        notModifiedHeaders: {
+          ETag: etag,
+          "Cache-Control": cacheControl,
+          "Last-Modified": lastModified,
+        },
         original,
       };
 
