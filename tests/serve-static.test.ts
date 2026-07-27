@@ -132,7 +132,7 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     expect(served).toBe(true);
     expect(captured.headers["Content-Encoding"]).toBe("br");
     expect(captured.headers["Content-Length"]).toBe(String(brContent.length));
-    expect(captured.headers["Content-Type"]).toBe("application/javascript; charset=UTF-8");
+    expect(captured.headers["Content-Type"]).toBe("application/javascript; charset=utf-8");
     // Body should be the precompressed brotli content
     const decompressed = zlib.brotliDecompressSync(captured.body).toString();
     expect(decompressed).toBe(jsContent);
@@ -481,7 +481,7 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     await captured.ended;
     expect(served).toBe(true);
     expect(captured.status).toBe(200);
-    expect(captured.headers["Content-Type"]).toBe("application/javascript; charset=UTF-8");
+    expect(captured.headers["Content-Type"]).toBe("application/javascript; charset=utf-8");
     expect(captured.headers["Content-Length"]).toBe(String(jsContent.length));
     expect(captured.body.length).toBe(0); // no body for HEAD
   });
@@ -730,7 +730,7 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     await captured.ended;
     expect(served).toBe(true);
     expect(captured.status).toBe(200);
-    expect(captured.headers["Content-Type"]).toBe("application/javascript; charset=UTF-8");
+    expect(captured.headers["Content-Type"]).toBe("application/javascript; charset=utf-8");
     expect(captured.body.toString()).toBe("slow path content");
   });
 
@@ -828,11 +828,11 @@ describe("tryServeStatic (with StaticFileCache)", () => {
         const origin = `http://127.0.0.1:${address.port}`;
 
         for (const [pathname, expected] of [
-          ["/script.js", "application/javascript; charset=UTF-8"],
-          ["/style.css", "text/css; charset=UTF-8"],
-          ["/data.json", "application/json; charset=UTF-8"],
-          ["/script.js.map", "application/json; charset=UTF-8"],
-          ["/table.csv", "text/csv; charset=UTF-8"],
+          ["/script.js", "application/javascript; charset=utf-8"],
+          ["/style.css", "text/css; charset=utf-8"],
+          ["/data.json", "application/json; charset=utf-8"],
+          ["/script.js.map", "application/json; charset=utf-8"],
+          ["/table.csv", "text/csv; charset=utf-8"],
           ["/module.wasm", "application/wasm"],
         ] as const) {
           const response = await fetch(origin + pathname);
@@ -842,7 +842,7 @@ describe("tryServeStatic (with StaticFileCache)", () => {
 
         const headResponse = await fetch(origin + "/script.js", { method: "HEAD" });
         expect(headResponse.headers.get("content-type")).toBe(
-          "application/javascript; charset=UTF-8",
+          "application/javascript; charset=utf-8",
         );
         expect(await headResponse.text()).toBe("");
       } finally {
@@ -887,7 +887,7 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     await captured.ended;
     expect(served).toBe(true);
     expect(captured.status).toBe(200);
-    expect(captured.headers["Content-Type"]).toBe("text/css; charset=UTF-8");
+    expect(captured.headers["Content-Type"]).toBe("text/css; charset=utf-8");
     expect(captured.body.toString()).toBe(cssContent);
   });
 
@@ -909,7 +909,7 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     await captured.ended;
     expect(served).toBe(true);
     expect(captured.status).toBe(200);
-    expect(captured.headers["Content-Type"]).toBe("text/css; charset=UTF-8");
+    expect(captured.headers["Content-Type"]).toBe("text/css; charset=utf-8");
     expect(captured.body.toString()).toBe(cssContent);
   });
 
@@ -938,7 +938,7 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     await captured.ended;
     expect(served).toBe(true);
     expect(captured.status).toBe(200);
-    expect(captured.headers["Content-Type"]).toBe("text/css; charset=UTF-8");
+    expect(captured.headers["Content-Type"]).toBe("text/css; charset=utf-8");
     expect(captured.body.toString()).toBe(cssContent);
   });
 
