@@ -360,8 +360,14 @@ export async function runPagesRequest(
     if (!deps.serveFilesystemRoute) return null;
     const served = await deps.serveFilesystemRoute(requestPathname, middlewareHeaders, phase);
     if (served instanceof Response) {
-      const response = mergeHeaders(served, middlewareHeaders, middlewareStatus);
-      if (response.status === 405 && response.headers.get("allow") === "GET, HEAD") {
+      const isStaticMethodNotAllowed =
+        served.status === 405 && served.headers.get("allow") === "GET, HEAD";
+      const response = mergeHeaders(
+        served,
+        middlewareHeaders,
+        isStaticMethodNotAllowed ? undefined : middlewareStatus,
+      );
+      if (isStaticMethodNotAllowed) {
         sanitizeMethodNotAllowedHeaders(response.headers, "GET, HEAD");
       }
       return {

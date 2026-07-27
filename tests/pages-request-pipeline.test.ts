@@ -1147,6 +1147,7 @@ describe("serveFilesystemRoute", () => {
         }),
     );
     const middleware = makeMiddleware({
+      status: 404,
       responseHeaders: [
         ["content-encoding", "gzip"],
         ["content-length", "999"],
