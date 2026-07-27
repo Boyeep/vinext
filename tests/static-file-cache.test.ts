@@ -74,7 +74,7 @@ describe("StaticFileCache", () => {
     const entry = cache.lookup("/_next/static/index-abc123.js");
 
     expect(entry).toBeDefined();
-    expect(entry!.original.headers["Content-Type"]).toBe("application/javascript");
+    expect(entry!.original.headers["Content-Type"]).toBe("application/javascript; charset=utf-8");
     expect(entry!.original.headers["Content-Length"]).toBe("12"); // "const x = 1;"
     expect(entry!.original.path).toBe(
       toSlash(path.join(clientDir, "_next/static/index-abc123.js")),
@@ -322,10 +322,10 @@ describe("StaticFileCache", () => {
     const cache = await StaticFileCache.create(clientDir);
 
     expect(cache.lookup("/_next/static/style-aaa.css")!.original.headers["Content-Type"]).toBe(
-      "text/css",
+      "text/css; charset=utf-8",
     );
     expect(cache.lookup("/_next/static/data-bbb.json")!.original.headers["Content-Type"]).toBe(
-      "application/json",
+      "application/json; charset=utf-8",
     );
     expect(cache.lookup("/logo.svg")!.original.headers["Content-Type"]).toBe("image/svg+xml");
     expect(cache.lookup("/photo.webp")!.original.headers["Content-Type"]).toBe("image/webp");
