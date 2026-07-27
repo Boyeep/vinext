@@ -66,7 +66,7 @@ export function ifRangeAllowsRange(
   }
 
   const timestamp = parseHttpDate(trimmed);
-  return Number.isFinite(timestamp) && Math.floor(mtimeMs / 1000) * 1000 <= timestamp;
+  return Number.isFinite(timestamp) && Math.floor(mtimeMs / 1000) * 1000 === timestamp;
 }
 
 const IMF_FIXDATE_RE =

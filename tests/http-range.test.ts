@@ -60,9 +60,9 @@ describe("ifRangeAllowsRange", () => {
     expect(ifRangeAllowsRange('"other"', '"asset"', mtimeMs)).toBe(false);
   });
 
-  it("accepts dates at or after the whole-second filesystem mtime", () => {
+  it("accepts only an exact whole-second Last-Modified date", () => {
     expect(ifRangeAllowsRange("Thu, 01 Jan 2026 00:00:00 GMT", '"asset"', mtimeMs)).toBe(true);
-    expect(ifRangeAllowsRange("Thu, 01 Jan 2026 00:00:01 GMT", '"asset"', mtimeMs)).toBe(true);
+    expect(ifRangeAllowsRange("Thu, 01 Jan 2026 00:00:01 GMT", '"asset"', mtimeMs)).toBe(false);
   });
 
   it("rejects stale or invalid dates", () => {
@@ -75,7 +75,7 @@ describe("ifRangeAllowsRange", () => {
   });
 
   it("accepts obsolete HTTP-date formats required for recipients", () => {
-    expect(ifRangeAllowsRange("Thursday, 01-Jan-26 00:00:01 GMT", '"asset"', mtimeMs)).toBe(true);
-    expect(ifRangeAllowsRange("Thu Jan  1 00:00:01 2026", '"asset"', mtimeMs)).toBe(true);
+    expect(ifRangeAllowsRange("Thursday, 01-Jan-26 00:00:00 GMT", '"asset"', mtimeMs)).toBe(true);
+    expect(ifRangeAllowsRange("Thu Jan  1 00:00:00 2026", '"asset"', mtimeMs)).toBe(true);
   });
 });

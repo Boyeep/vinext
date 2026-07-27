@@ -672,13 +672,17 @@ async function tryServeStatic(
 
     if (range.kind === "range") {
       const length = range.end - range.start + 1;
-      res.writeHead(206, {
+      const rangeHeaders = {
         ...entry.original.headers,
         ...extraHeaders,
         "Accept-Ranges": "bytes",
         "Content-Length": String(length),
         "Content-Range": `bytes ${range.start}-${range.end}/${entry.original.size}`,
-      });
+      };
+      res.writeHead(
+        206,
+        variesByEncoding ? mergeVaryHeader(rangeHeaders, "Accept-Encoding") : rangeHeaders,
+      );
       if (entry.original.buffer) {
         res.end(entry.original.buffer.subarray(range.start, range.end + 1));
       } else {
@@ -800,11 +804,15 @@ async function tryServeStatic(
 
   if (range.kind === "range") {
     const length = range.end - range.start + 1;
-    res.writeHead(206, {
+    const rangeHeaders = {
       ...baseHeaders,
       "Content-Length": String(length),
       "Content-Range": `bytes ${range.start}-${range.end}/${resolved.size}`,
-    });
+    };
+    res.writeHead(
+      206,
+      isCompressible ? mergeVaryHeader(rangeHeaders, "Accept-Encoding") : rangeHeaders,
+    );
     pipeStaticFileRange(resolved.path, range, res);
     return true;
   }

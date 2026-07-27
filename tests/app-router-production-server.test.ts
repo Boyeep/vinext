@@ -360,6 +360,25 @@ describe("App Router Production server (startProdServer)", () => {
     );
     expect(new Uint8Array(await hugeEnd.arrayBuffer())).toEqual(fullBody.subarray(2));
 
+    const matchingIfRange = await fetch(assetUrl, {
+      headers: {
+        Range: "bytes=2-9",
+        "If-Range": full.headers.get("last-modified")!,
+      },
+    });
+    expect(matchingIfRange.status).toBe(206);
+    expect(new Uint8Array(await matchingIfRange.arrayBuffer())).toEqual(fullBody.subarray(2, 10));
+
+    const futureIfRange = await fetch(assetUrl, {
+      headers: {
+        Range: "bytes=2-9",
+        "If-Range": "Thu, 01 Jan 2099 00:00:00 GMT",
+      },
+    });
+    expect(futureIfRange.status).toBe(200);
+    expect(futureIfRange.headers.get("content-range")).toBeNull();
+    expect(new Uint8Array(await futureIfRange.arrayBuffer())).toEqual(fullBody);
+
     const invalidIfRange = await fetch(assetUrl, {
       headers: {
         Range: "bytes=2-9",

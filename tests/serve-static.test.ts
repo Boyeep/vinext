@@ -714,6 +714,7 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     const relativePath = "_next/static/range-aaa111.js";
     const content = "0123456789";
     await writeFile(clientDir, relativePath, content);
+    await writeFile(clientDir, `${relativePath}.br`, zlib.brotliCompressSync(content));
     const cache = await StaticFileCache.create(clientDir);
 
     const initialReq = mockReq();
@@ -746,6 +747,7 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     expect(range.headers["Content-Range"]).toBe("bytes 2-9/10");
     expect(range.headers["Content-Length"]).toBe("8");
     expect(range.headers["Content-Encoding"]).toBeUndefined();
+    expect(range.headers.Vary).toBe("Accept-Encoding");
     expect(range.body.toString()).toBe("23456789");
 
     const unsatisfiableReq = mockReq(undefined, { range: "bytes=9007199254740992-" });
@@ -807,6 +809,15 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     expect(invalidDate.status).toBe(200);
     expect(invalidDate.headers["Content-Range"]).toBeUndefined();
     expect(invalidDate.body.toString()).toBe("0123456789");
+
+    const rangeReq = mockReq("br", { range: "bytes=2-5" });
+    const { res: rangeRes, captured: range } = mockRes();
+    await tryServeStatic(rangeReq, rangeRes, clientDir, "/if-range.txt", true);
+    await range.ended;
+    expect(range.status).toBe(206);
+    expect(range.headers.Vary).toBe("Accept-Encoding");
+    expect(range.headers["Content-Encoding"]).toBeUndefined();
+    expect(range.body.toString()).toBe("2345");
   });
 
   it("slow path does not vary non-compressible files", async () => {
