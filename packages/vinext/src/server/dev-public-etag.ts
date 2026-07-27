@@ -7,15 +7,22 @@ import { normalizePath } from "./normalize-path.js";
 export type DevPublicFileEtagIndex = {
   publicDir: string;
   etagsByRealPath: Map<string, string>;
+  foldedRealPaths: Map<string, string | null>;
   symlinkTargets: Map<string, string>;
+  caseInsensitive: boolean;
 };
 
-export function createDevPublicFileEtags(root: string): DevPublicFileEtagIndex {
-  const publicDir = path.join(root, "public");
+export function createDevPublicFileEtags(
+  externalPublicDir: string,
+  caseInsensitive = detectCaseInsensitiveDirectory(externalPublicDir),
+): DevPublicFileEtagIndex {
+  const publicDir = toSlash(externalPublicDir);
   const index: DevPublicFileEtagIndex = {
     publicDir,
     etagsByRealPath: new Map(),
+    foldedRealPaths: new Map(),
     symlinkTargets: new Map(),
+    caseInsensitive,
   };
 
   const walk = (dir: string, realAncestors: ReadonlySet<string>): void => {
@@ -49,7 +56,7 @@ export function createDevPublicFileEtags(root: string): DevPublicFileEtagIndex {
         if (stats.isDirectory()) {
           walk(fullPath, nextAncestors);
         } else if (stats.isFile()) {
-          index.etagsByRealPath.set(realTarget, etagForStats(stats));
+          indexFileEtag(index, realTarget, etagForStats(stats));
         }
         continue;
       }
@@ -61,7 +68,7 @@ export function createDevPublicFileEtags(root: string): DevPublicFileEtagIndex {
 
       try {
         const realPath = toSlash(fs.realpathSync(fullPath));
-        index.etagsByRealPath.set(realPath, etagForStats(fs.statSync(fullPath)));
+        indexFileEtag(index, realPath, etagForStats(fs.statSync(fullPath)));
       } catch {
         // Ignore entries removed during the startup scan.
       }
@@ -106,7 +113,7 @@ export function updateDevPublicFileEtag(
     const lstat = fs.lstatSync(filePath);
     if (lstat.isSymbolicLink() || !lstat.isFile()) return false;
     const realPath = toSlash(fs.realpathSync(filePath));
-    index.etagsByRealPath.set(realPath, etagForStats(fs.statSync(filePath)));
+    indexFileEtag(index, realPath, etagForStats(fs.statSync(filePath)));
     return true;
   } catch {
     return false;
@@ -141,20 +148,35 @@ export function resolveDevPublicIfNoneMatch(
 
   let filePath = path.join(index.publicDir, pathname);
   if (!isWithinPublicDir(index.publicDir, filePath)) return undefined;
-  filePath = resolveSymlinkTargets(filePath, index.symlinkTargets);
+  // Vite normally guards public requests with an exact-spelling file set. It
+  // disables that optimization when the public tree contains a symlink and
+  // lets sirv consult the filesystem, which may then accept case aliases.
+  const supportsFoldedLookup = index.caseInsensitive && index.symlinkTargets.size > 0;
+  filePath = resolveSymlinkTargets(filePath, index.symlinkTargets, supportsFoldedLookup);
 
-  const etag = index.etagsByRealPath.get(filePath);
+  let etag = index.etagsByRealPath.get(filePath);
+  if (!etag && supportsFoldedLookup) {
+    const canonicalPath = index.foldedRealPaths.get(foldPath(filePath));
+    if (canonicalPath) etag = index.etagsByRealPath.get(canonicalPath);
+  }
   return etag && matchesIfNoneMatch(ifNoneMatch, etag) ? etag : undefined;
 }
 
-function resolveSymlinkTargets(filePath: string, targets: ReadonlyMap<string, string>): string {
+function resolveSymlinkTargets(
+  filePath: string,
+  targets: ReadonlyMap<string, string>,
+  caseInsensitive: boolean,
+): string {
   const seen = new Set<string>();
   while (!seen.has(filePath)) {
     seen.add(filePath);
     let matchedSource: string | undefined;
+    const comparableFilePath = caseInsensitive ? foldPath(filePath) : filePath;
     for (const source of targets.keys()) {
+      const comparableSource = caseInsensitive ? foldPath(source) : source;
       if (
-        (filePath === source || filePath.startsWith(source + "/")) &&
+        (comparableFilePath === comparableSource ||
+          comparableFilePath.startsWith(comparableSource + "/")) &&
         (!matchedSource || source.length > matchedSource.length)
       ) {
         matchedSource = source;
@@ -180,4 +202,66 @@ function etagForStats(stats: fs.Stats): string {
   // Vite's public-file middleware delegates to sirv, which uses this
   // size/mtime weak validator in development.
   return `W/"${stats.size}-${stats.mtime.getTime()}"`;
+}
+
+function indexFileEtag(index: DevPublicFileEtagIndex, realPath: string, etag: string): void {
+  index.etagsByRealPath.set(realPath, etag);
+  if (!index.caseInsensitive) return;
+
+  const foldedPath = foldPath(realPath);
+  const existing = index.foldedRealPaths.get(foldedPath);
+  if (existing === undefined || existing === realPath) {
+    index.foldedRealPaths.set(foldedPath, realPath);
+  } else {
+    // A synthetic or unusual filesystem can expose names which our ASCII fold
+    // aliases even though the filesystem does not. Exact spellings remain
+    // usable; ambiguous folded spellings fail closed.
+    index.foldedRealPaths.set(foldedPath, null);
+  }
+}
+
+function detectCaseInsensitiveDirectory(externalDir: string): boolean {
+  const dir = toSlash(externalDir);
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+
+  for (const entry of entries) {
+    const toggledName = toggleAsciiCase(entry.name);
+    if (!toggledName) continue;
+    try {
+      const actual = toSlash(fs.realpathSync(path.join(dir, entry.name)));
+      const toggled = toSlash(fs.realpathSync(path.join(dir, toggledName)));
+      return actual === toggled;
+    } catch {
+      return false;
+    }
+  }
+
+  const basename = path.basename(dir);
+  const toggledBasename = toggleAsciiCase(basename);
+  if (!toggledBasename) return false;
+  try {
+    return (
+      toSlash(fs.realpathSync(dir)) ===
+      toSlash(fs.realpathSync(path.join(path.dirname(dir), toggledBasename)))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function toggleAsciiCase(value: string): string | undefined {
+  const index = value.search(/[A-Za-z]/);
+  if (index === -1) return undefined;
+  const char = value[index]!;
+  const toggled = char === char.toLowerCase() ? char.toUpperCase() : char.toLowerCase();
+  return value.slice(0, index) + toggled + value.slice(index + 1);
+}
+
+function foldPath(value: string): string {
+  return value.replace(/[A-Z]/g, (char) => char.toLowerCase());
 }

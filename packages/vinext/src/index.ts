@@ -4262,10 +4262,15 @@ export const loadServerActionClient = ${
       },
 
       configureServer(server: ViteDevServer) {
-        let devPublicFileEtags = createDevPublicFileEtags(root);
+        const devPublicDir = server.config.publicDir || undefined;
+        let devPublicFileEtags = devPublicDir ? createDevPublicFileEtags(devPublicDir) : undefined;
 
         server.middlewares.use((req, _res, next) => {
           req.__vinextOriginalEncodedUrl ??= req.url;
+          if (!devPublicFileEtags) {
+            next();
+            return;
+          }
           const normalizedIfNoneMatch = resolveDevPublicIfNoneMatch(
             req.method,
             req.url,
@@ -4283,8 +4288,9 @@ export const loadServerActionClient = ${
         });
 
         const updateDevPublicEtag = (filePath: string) => {
+          if (!devPublicFileEtags || !devPublicDir) return;
           if (!updateDevPublicFileEtag(devPublicFileEtags, filePath)) {
-            devPublicFileEtags = createDevPublicFileEtags(root);
+            devPublicFileEtags = createDevPublicFileEtags(devPublicDir);
           }
         };
         server.watcher.on("add", updateDevPublicEtag);

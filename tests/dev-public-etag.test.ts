@@ -14,7 +14,9 @@ const ETAG = 'W/"90-1234"';
 const publicEtags: DevPublicFileEtagIndex = {
   publicDir: "/public",
   etagsByRealPath: new Map([["/public/asset.js", ETAG]]),
+  foldedRealPaths: new Map(),
   symlinkTargets: new Map(),
+  caseInsensitive: false,
 };
 
 describe("resolveDevPublicIfNoneMatch", () => {
@@ -72,7 +74,7 @@ describe("resolveDevPublicIfNoneMatch", () => {
       fs.mkdirSync(publicDir);
       fs.writeFileSync(filePath, "initial");
 
-      const index = createDevPublicFileEtags(root);
+      const index = createDevPublicFileEtags(publicDir);
       const realPath = toSlash(fs.realpathSync(filePath));
       const initial = index.etagsByRealPath.get(realPath);
       expect(initial).toMatch(/^W\/"7-\d+"$/);
@@ -100,7 +102,7 @@ describe("resolveDevPublicIfNoneMatch", () => {
         fs.symlinkSync("a", path.join(publicDir, "b"), "dir");
         fs.symlinkSync("..", path.join(publicDir, "a", "cycle"), "dir");
 
-        const index = createDevPublicFileEtags(root);
+        const index = createDevPublicFileEtags(publicDir);
         const etag = index.etagsByRealPath.get(
           toSlash(fs.realpathSync(path.join(publicDir, "a/asset.js"))),
         );
@@ -126,7 +128,7 @@ describe("resolveDevPublicIfNoneMatch", () => {
         fs.writeFileSync(externalFile, "initial");
         fs.symlinkSync(externalDir, path.join(publicDir, "alias"), "dir");
 
-        const index = createDevPublicFileEtags(root);
+        const index = createDevPublicFileEtags(publicDir);
         const initial = resolveDevPublicIfNoneMatch(
           "GET",
           "/alias/asset.js",
@@ -148,11 +150,66 @@ describe("resolveDevPublicIfNoneMatch", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "folds served names only when the filesystem is case-insensitive",
+    () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-public-etag-case-"));
+      const publicDir = path.join(root, "public");
+      try {
+        fs.mkdirSync(publicDir);
+        fs.writeFileSync(path.join(publicDir, "MixedCase.js"), "content");
+
+        const exactSetIndex = createDevPublicFileEtags(publicDir, true);
+        exactSetIndex.symlinkTargets.clear();
+        expect(
+          resolveDevPublicIfNoneMatch("GET", "/mixedcase.js", "*", exactSetIndex),
+        ).toBeUndefined();
+
+        fs.symlinkSync("MixedCase.js", path.join(publicDir, "alias.js"));
+
+        const caseInsensitiveIndex = createDevPublicFileEtags(publicDir, true);
+        const etag = resolveDevPublicIfNoneMatch("GET", "/mixedcase.js", "*", caseInsensitiveIndex);
+        expect(etag).toMatch(/^W\//);
+        expect(resolveDevPublicIfNoneMatch("GET", "/ALIAS.JS", "*", caseInsensitiveIndex)).toBe(
+          etag,
+        );
+
+        const caseSensitiveIndex = createDevPublicFileEtags(publicDir, false);
+        expect(
+          resolveDevPublicIfNoneMatch("GET", "/mixedcase.js", "*", caseSensitiveIndex),
+        ).toBeUndefined();
+        expect(
+          resolveDevPublicIfNoneMatch("GET", "/MixedCase.js", "*", caseSensitiveIndex),
+        ).toMatch(/^W\//);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("fails ambiguous folded names closed while preserving exact spellings", () => {
+    const index: DevPublicFileEtagIndex = {
+      publicDir: "/public",
+      etagsByRealPath: new Map([
+        ["/public/A.js", 'W/"5-1"'],
+        ["/public/a.js", 'W/"5-2"'],
+      ]),
+      foldedRealPaths: new Map([["/public/a.js", null]]),
+      symlinkTargets: new Map([["/public/alias", "/public/A.js"]]),
+      caseInsensitive: true,
+    };
+    expect(resolveDevPublicIfNoneMatch("GET", "/A.js", "*", index)).toBe('W/"5-1"');
+    expect(resolveDevPublicIfNoneMatch("GET", "/a.js", "*", index)).toBe('W/"5-2"');
+    expect(resolveDevPublicIfNoneMatch("GET", "/a.JS", "*", index)).toBeUndefined();
+  });
+
   it.runIf(process.platform === "win32")("normalizes encoded Windows separators like Vite", () => {
     const nestedEtags: DevPublicFileEtagIndex = {
       publicDir: "/public",
       etagsByRealPath: new Map([["/public/foo/bar.js", ETAG]]),
+      foldedRealPaths: new Map(),
       symlinkTargets: new Map(),
+      caseInsensitive: false,
     };
     expect(resolveDevPublicIfNoneMatch("GET", "/foo%5Cbar.js", '"90-1234"', nestedEtags)).toBe(
       ETAG,
