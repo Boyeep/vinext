@@ -1277,6 +1277,8 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     await captured.ended;
     expect(captured.status).toBe(304);
     expect(captured.headers["Vary"]).toBe("Accept-Encoding");
+    expect(captured.headers["Content-Type"]).toBeUndefined();
+    expect(captured.headers["Accept-Ranges"]).toBeUndefined();
   });
 
   it("returns slow-path 304 via identity fallback when codings are refused", async () => {

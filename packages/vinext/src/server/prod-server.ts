@@ -799,9 +799,15 @@ async function tryServeStatic(
   }
 
   if (preconditionResult === "not-modified") {
+    const notModifiedBaseHeaders: Record<string, string | string[]> = {
+      "Cache-Control": cacheControl,
+      ETag: etag,
+      "Last-Modified": new Date(resolved.mtimeMs).toUTCString(),
+      ...extraHeaders,
+    };
     const notModifiedHeaders = isCompressible
-      ? mergeVaryHeader(baseHeaders, "Accept-Encoding")
-      : baseHeaders;
+      ? mergeVaryHeader(notModifiedBaseHeaders, "Accept-Encoding")
+      : notModifiedBaseHeaders;
     if (encoding !== "identity") notModifiedHeaders["Content-Encoding"] = encoding;
     res.writeHead(304, notModifiedHeaders);
     res.end();
