@@ -26,12 +26,9 @@ export type DevPublicPathNode = {
 type DevPublicAliasCandidate = {
   segment: string;
   node: DevPublicPathNode;
+  simpleCasePattern: RegExp;
 };
 
-const unicodeBaseCollator = new Intl.Collator("und", {
-  usage: "search",
-  sensitivity: "base",
-});
 const unicodeAccentCollator = new Intl.Collator("und", {
   usage: "search",
   sensitivity: "accent",
@@ -259,6 +256,10 @@ function indexRequestPath(
       indexUnicodeAlias(node, unicodeBucketKey(segment, index.normalizationInsensitive), {
         segment,
         node: child,
+        simpleCasePattern: new RegExp(
+          `^(?:${escapeRegex(index.normalizationInsensitive ? segment.normalize("NFD") : segment)})$`,
+          "iu",
+        ),
       });
     }
     node = child;
@@ -374,22 +375,38 @@ function resolveUnicodeAlias(
 
   let matched: DevPublicPathNode | undefined;
   for (const candidate of candidates) {
-    if (!segmentsEquivalent(index, requestedSegment, candidate.segment)) continue;
+    if (!segmentsEquivalent(index, requestedSegment, candidate)) continue;
     if (matched && matched !== candidate.node) return null;
     matched = candidate.node;
   }
   return matched;
 }
 
-function segmentsEquivalent(index: DevPublicFileEtagIndex, left: string, right: string): boolean {
+function segmentsEquivalent(
+  index: DevPublicFileEtagIndex,
+  left: string,
+  candidate: DevPublicAliasCandidate,
+): boolean {
   const normalizedLeft = index.normalizationInsensitive ? left.normalize("NFD") : left;
-  const normalizedRight = index.normalizationInsensitive ? right.normalize("NFD") : right;
+  const normalizedRight = index.normalizationInsensitive
+    ? candidate.segment.normalize("NFD")
+    : candidate.segment;
   if (!index.caseInsensitive) return normalizedLeft === normalizedRight;
-
+  if (candidate.simpleCasePattern.test(normalizedLeft)) return true;
+  if (!hasLengthChangingUppercase(normalizedLeft) && !hasLengthChangingUppercase(normalizedRight)) {
+    return false;
+  }
   return (
-    unicodeAccentCollator.compare(normalizedLeft.toUpperCase(), normalizedRight.toUpperCase()) ===
-      0 && unicodeBaseCollator.compare(normalizedLeft, normalizedRight) === 0
+    unicodeAccentCollator.compare(normalizedLeft.toUpperCase(), normalizedRight.toUpperCase()) === 0
   );
+}
+
+function hasLengthChangingUppercase(value: string): boolean {
+  return Array.from(value.toUpperCase()).length !== Array.from(value).length;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
 }
 
 function resolveRedirect(
