@@ -28,4 +28,16 @@ describe("parseHttpDate", () => {
       vi.useRealTimers();
     }
   });
+
+  it("adjusts an RFC 850 leap day before validating the inferred century", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-27T12:00:00Z");
+    try {
+      expect(parseHttpDate("Tuesday, 29-Feb-00 00:00:00 GMT")).toBe(
+        Date.parse("2000-02-29T00:00:00Z"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
