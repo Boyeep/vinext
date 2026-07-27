@@ -18,27 +18,44 @@ import { isPrecompressedVariantBeneficial } from "../utils/precompressed-variant
 
 /** Content-type lookup for static assets. Shared with prod-server.ts. */
 export const CONTENT_TYPES: Record<string, string> = {
-  ".js": "application/javascript",
-  ".mjs": "application/javascript",
-  ".css": "text/css",
-  ".html": "text/html; charset=utf-8",
-  ".json": "application/json",
-  ".txt": "text/plain; charset=utf-8",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
+  ".avif": "image/avif",
+  ".bmp": "image/bmp",
+  ".csv": "text/csv; charset=utf-8",
+  ".eot": "application/vnd.ms-fontobject",
   ".gif": "image/gif",
-  ".svg": "image/svg+xml",
+  ".heic": "image/heic",
+  ".js": "application/javascript; charset=utf-8",
+  ".mjs": "application/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
   ".ico": "image/x-icon",
+  ".jpeg": "image/jpeg",
+  ".jpg": "image/jpeg",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".mp3": "audio/mpeg",
+  ".mp4": "video/mp4",
+  ".ogg": "audio/ogg",
+  ".ogv": "video/ogg",
+  ".pdf": "application/pdf",
+  ".png": "image/png",
+  ".rsc": "text/x-component",
+  ".svg": "image/svg+xml",
+  ".ttf": "font/ttf",
+  ".txt": "text/plain; charset=utf-8",
+  ".wasm": "application/wasm",
+  ".webm": "video/webm",
+  ".webmanifest": "application/manifest+json",
+  ".webp": "image/webp",
   ".woff": "font/woff",
   ".woff2": "font/woff2",
-  ".ttf": "font/ttf",
-  ".eot": "application/vnd.ms-fontobject",
-  ".webp": "image/webp",
-  ".avif": "image/avif",
-  ".map": "application/json",
-  ".rsc": "text/x-component",
+  ".xml": "application/xml",
 };
+
+/** Resolve a path's MIME type with case-insensitive extension matching. */
+export function contentTypeForPath(filePath: string): string {
+  return CONTENT_TYPES[path.extname(filePath).toLowerCase()] ?? "application/octet-stream";
+}
 
 /**
  * Files below this size are buffered in memory at startup for zero-syscall
@@ -145,7 +162,7 @@ export class StaticFileCache {
       if (isHashed && PRECOMPRESSION_TEMP_FILE_RE.test(relativePath)) continue;
 
       const ext = path.extname(relativePath);
-      const contentType = CONTENT_TYPES[ext] ?? "application/octet-stream";
+      const contentType = contentTypeForPath(relativePath);
       const cacheControl = isHashed
         ? "public, max-age=31536000, immutable"
         : "public, max-age=3600";
