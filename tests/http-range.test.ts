@@ -60,9 +60,9 @@ describe("ifRangeAllowsRange", () => {
     expect(ifRangeAllowsRange('"other"', '"asset"', mtimeMs)).toBe(false);
   });
 
-  it("accepts only an exact whole-second Last-Modified date", () => {
+  it("accepts an equal or future If-Range date", () => {
     expect(ifRangeAllowsRange("Thu, 01 Jan 2026 00:00:00 GMT", '"asset"', mtimeMs)).toBe(true);
-    expect(ifRangeAllowsRange("Thu, 01 Jan 2026 00:00:01 GMT", '"asset"', mtimeMs)).toBe(false);
+    expect(ifRangeAllowsRange("Thu, 01 Jan 2026 00:00:01 GMT", '"asset"', mtimeMs)).toBe(true);
   });
 
   it("rejects stale or invalid dates", () => {

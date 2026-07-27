@@ -53,7 +53,10 @@ export function parseByteRange(value: string | undefined, size: number): ByteRan
 
 /**
  * If-Range requires strong entity-tag comparison. Date validators are matched
- * at HTTP-date (whole-second) precision because filesystem mtimes are finer.
+ * at HTTP-date (whole-second) precision because filesystem mtimes are finer,
+ * and allow a range when the representation has not changed since that date.
+ * Vinext's static ETags are currently weak, so its emitted Last-Modified value
+ * is the validator that can enable a range response on a later request.
  */
 export function ifRangeAllowsRange(
   value: string | undefined,
@@ -68,7 +71,7 @@ export function ifRangeAllowsRange(
   }
 
   const timestamp = parseHttpDate(trimmed);
-  return Number.isFinite(timestamp) && Math.floor(mtimeMs / 1000) * 1000 === timestamp;
+  return Number.isFinite(timestamp) && Math.floor(mtimeMs / 1000) * 1000 <= timestamp;
 }
 
 function parseDecimalInteger(value: string): number | "overflow" {

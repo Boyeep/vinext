@@ -47,8 +47,7 @@ export function parseHttpDate(value: string): number {
   if (rfc850) {
     const now = new Date();
     let year = now.getUTCFullYear() - (now.getUTCFullYear() % 100) + Number(rfc850[4]);
-    const candidateTimestamp = timestampFromHttpDateParts(
-      undefined,
+    const candidateTimestamp = timestampForRfc850YearWindow(
       rfc850[2],
       rfc850[3],
       String(year),
@@ -84,6 +83,22 @@ export function parseHttpDate(value: string): number {
   }
 
   return Number.NaN;
+}
+
+function timestampForRfc850YearWindow(
+  dayValue: string,
+  monthValue: string,
+  yearValue: string,
+  hourValue: string,
+  minuteValue: string,
+  secondValue: string,
+): number {
+  // Normalize solely for the 50-year comparison. Final calendar and weekday
+  // validation happens after the RFC 850 century adjustment.
+  const date = new Date(0);
+  date.setUTCFullYear(Number(yearValue), MONTH_INDEX[monthValue], Number(dayValue));
+  date.setUTCHours(Number(hourValue), Number(minuteValue), Number(secondValue), 0);
+  return date.getTime();
 }
 
 function timestampFromHttpDateParts(

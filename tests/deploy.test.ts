@@ -58,6 +58,7 @@ import {
 } from "../packages/vinext/src/build/pages-client-assets-module.js";
 import { fetchWorkerFilesystemRoute } from "../packages/vinext/src/server/pages-request-pipeline.js";
 import {
+  createStaticAssetRequest,
   finalizeMissingStaticAssetResponse,
   mergeHeaders,
   resolveStaticAssetSignal,
@@ -1692,6 +1693,52 @@ describe("readPagesRouterEntrySource", () => {
     expect(resolved!.headers.get("x-middleware")).toBe("blocked");
     expect(resolved!.headers.get("x-asset-path")).toBe("/logo/logo.svg");
     expect(await resolved!.text()).toBe("<svg />");
+  });
+
+  it("preserves partial asset status over a middleware status override", async () => {
+    const signalResponse = new Response(null, {
+      status: 403,
+      headers: {
+        "x-vinext-static-file": encodeURIComponent("/asset.txt"),
+        "x-middleware": "blocked",
+      },
+    });
+
+    const resolved = await resolveStaticAssetSignal(signalResponse, {
+      fetchAsset: async () =>
+        new Response("par", {
+          status: 206,
+          headers: {
+            "content-length": "3",
+            "content-range": "bytes 0-2/7",
+          },
+        }),
+    });
+
+    expect(resolved).not.toBeNull();
+    expect(resolved!.status).toBe(206);
+    expect(resolved!.headers.get("content-length")).toBe("3");
+    expect(resolved!.headers.get("content-range")).toBe("bytes 0-2/7");
+    expect(resolved!.headers.get("x-middleware")).toBe("blocked");
+    expect(await resolved!.text()).toBe("par");
+  });
+
+  it("retargets Worker assets without dropping conditional and range fields", () => {
+    const source = new Request("https://example.com/rewrite", {
+      method: "HEAD",
+      headers: {
+        "cache-control": "no-cache",
+        "if-none-match": 'W/"asset"',
+        "if-modified-since": "Sun, 26 Jul 2026 12:34:56 GMT",
+        "if-range": '"asset"',
+        range: "bytes=0-2",
+      },
+    });
+
+    const assetRequest = createStaticAssetRequest("/asset.txt", source);
+    expect(assetRequest.url).toBe("https://example.com/asset.txt");
+    expect(assetRequest.method).toBe("HEAD");
+    expect(Object.fromEntries(assetRequest.headers)).toEqual(Object.fromEntries(source.headers));
   });
 
   it("preserves x-middleware-request-* headers for prod request override handling", () => {
