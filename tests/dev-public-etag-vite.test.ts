@@ -62,6 +62,78 @@ describe("dev public ETag Vite configuration", () => {
     expect(fallback.headers.get("x-fallback-if-none-match")).toBe(rootOnlyStrong);
     expect(await fallback.text()).toBe("fallback");
   });
+
+  it.runIf(process.platform === "darwin")(
+    "matches case and normalization aliases when a dangling symlink enables Vite stat lookup",
+    async () => {
+      const root = createRoot();
+      const publicDir = path.join(root, "public");
+      fs.mkdirSync(publicDir);
+      const mixedCaseFile = path.join(publicDir, "MixedCase.js");
+      const unicodeFile = path.join(publicDir, "Éclair.js");
+      fs.writeFileSync(mixedCaseFile, "mixed");
+      fs.writeFileSync(unicodeFile, "unicode");
+      fs.symlinkSync("missing", path.join(publicDir, "0-broken"));
+
+      const lowerCaseFile = path.join(publicDir, "mixedCase.js");
+      if (fs.realpathSync.native(mixedCaseFile) !== fs.realpathSync.native(lowerCaseFile)) return;
+
+      const baseUrl = await startServer(root, "public");
+      const mixedEtag = (await fetch(`${baseUrl}/MixedCase.js`)).headers.get("etag");
+      expect(mixedEtag).toMatch(/^W\//);
+      expect(
+        (
+          await fetch(`${baseUrl}/mixedcase.js`, {
+            headers: { "If-None-Match": mixedEtag!.replace(/^W\//, "") },
+          })
+        ).status,
+      ).toBe(304);
+
+      const unicodeEtag = (await fetch(`${baseUrl}/%C3%89clair.js`)).headers.get("etag");
+      expect(unicodeEtag).toMatch(/^W\//);
+      expect(
+        (
+          await fetch(`${baseUrl}/%C3%A9clair.js`, {
+            headers: { "If-None-Match": unicodeEtag!.replace(/^W\//, "") },
+          })
+        ).status,
+      ).toBe(304);
+
+      const decomposedFile = path.join(publicDir, "E\u0301clair.js");
+      if (fs.realpathSync.native(unicodeFile) === fs.realpathSync.native(decomposedFile)) {
+        expect(
+          (
+            await fetch(`${baseUrl}/E%CC%81clair.js`, {
+              headers: { "If-None-Match": unicodeEtag!.replace(/^W\//, "") },
+            })
+          ).status,
+        ).toBe(304);
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not fold or rewrite a wrong-case request for a symlinked public root",
+    async () => {
+      const root = createRoot();
+      const actualPublicDir = path.join(root, "actual-public");
+      const publicDir = path.join(root, "public");
+      fs.mkdirSync(actualPublicDir);
+      fs.writeFileSync(path.join(actualPublicDir, "MixedCase.js"), "content");
+      fs.symlinkSync(actualPublicDir, publicDir, "dir");
+
+      const baseUrl = await startServer(root, "public");
+      const initial = await fetch(`${baseUrl}/MixedCase.js`);
+      const strong = initial.headers.get("etag")!.replace(/^W\//, "");
+      const fallback = await fetch(`${baseUrl}/mixedcase.js`, {
+        headers: { "If-None-Match": strong },
+      });
+
+      expect(fallback.status).toBe(200);
+      expect(fallback.headers.get("x-fallback-if-none-match")).toBe(strong);
+      expect(await fallback.text()).toBe("fallback");
+    },
+  );
 });
 
 function createRoot(): string {

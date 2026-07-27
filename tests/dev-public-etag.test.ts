@@ -16,7 +16,9 @@ const publicEtags: DevPublicFileEtagIndex = {
   etagsByRealPath: new Map([["/public/asset.js", ETAG]]),
   foldedRealPaths: new Map(),
   symlinkTargets: new Map(),
+  hasSymlink: false,
   caseInsensitive: false,
+  normalizationInsensitive: false,
 };
 
 describe("resolveDevPublicIfNoneMatch", () => {
@@ -196,12 +198,79 @@ describe("resolveDevPublicIfNoneMatch", () => {
       ]),
       foldedRealPaths: new Map([["/public/a.js", null]]),
       symlinkTargets: new Map([["/public/alias", "/public/A.js"]]),
+      hasSymlink: true,
       caseInsensitive: true,
+      normalizationInsensitive: false,
     };
     expect(resolveDevPublicIfNoneMatch("GET", "/A.js", "*", index)).toBe('W/"5-1"');
     expect(resolveDevPublicIfNoneMatch("GET", "/a.js", "*", index)).toBe('W/"5-2"');
     expect(resolveDevPublicIfNoneMatch("GET", "/a.JS", "*", index)).toBeUndefined();
   });
+
+  it.runIf(process.platform !== "win32")(
+    "uses dangling symlinks to mirror Vite's stat-based public lookup",
+    () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-public-etag-dangling-"));
+      const publicDir = path.join(root, "public");
+      try {
+        fs.mkdirSync(publicDir);
+        fs.symlinkSync("missing", path.join(publicDir, "0-broken"));
+        fs.writeFileSync(path.join(publicDir, "MixedCase.js"), "content");
+
+        const index = createDevPublicFileEtags(publicDir, true);
+        expect(index.hasSymlink).toBe(true);
+        expect([...index.symlinkTargets.keys()].some((key) => key.endsWith("/0-broken"))).toBe(
+          false,
+        );
+        expect(resolveDevPublicIfNoneMatch("GET", "/mixedcase.js", "*", index)).toMatch(/^W\//);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not treat a symlinked public root as a child symlink",
+    () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-public-etag-root-link-"));
+      const actualPublicDir = path.join(root, "actual-public");
+      const publicDir = path.join(root, "public");
+      try {
+        fs.mkdirSync(actualPublicDir);
+        fs.writeFileSync(path.join(actualPublicDir, "MixedCase.js"), "content");
+        fs.symlinkSync(actualPublicDir, publicDir, "dir");
+
+        const index = createDevPublicFileEtags(publicDir, true);
+        expect(index.symlinkTargets.get(toSlash(publicDir))).toBe(
+          toSlash(fs.realpathSync.native(actualPublicDir)),
+        );
+        expect(index.hasSymlink).toBe(false);
+        expect(resolveDevPublicIfNoneMatch("GET", "/mixedcase.js", "*", index)).toBeUndefined();
+        expect(resolveDevPublicIfNoneMatch("GET", "/MixedCase.js", "*", index)).toMatch(/^W\//);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "folds Unicode case and filesystem normalization aliases",
+    () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-public-etag-unicode-"));
+      const publicDir = path.join(root, "public");
+      try {
+        fs.mkdirSync(publicDir);
+        fs.writeFileSync(path.join(publicDir, "Éclair.js"), "content");
+        fs.symlinkSync("Éclair.js", path.join(publicDir, "alias.js"));
+
+        const index = createDevPublicFileEtags(publicDir, true, true);
+        expect(resolveDevPublicIfNoneMatch("GET", "/%C3%A9clair.js", "*", index)).toMatch(/^W\//);
+        expect(resolveDevPublicIfNoneMatch("GET", "/e%CC%81clair.js", "*", index)).toMatch(/^W\//);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.runIf(process.platform === "win32")("normalizes encoded Windows separators like Vite", () => {
     const nestedEtags: DevPublicFileEtagIndex = {
@@ -209,7 +278,9 @@ describe("resolveDevPublicIfNoneMatch", () => {
       etagsByRealPath: new Map([["/public/foo/bar.js", ETAG]]),
       foldedRealPaths: new Map(),
       symlinkTargets: new Map(),
+      hasSymlink: false,
       caseInsensitive: false,
+      normalizationInsensitive: false,
     };
     expect(resolveDevPublicIfNoneMatch("GET", "/foo%5Cbar.js", '"90-1234"', nestedEtags)).toBe(
       ETAG,
