@@ -879,6 +879,7 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     );
     await unsatisfiable.ended;
     expect(unsatisfiable.status).toBe(416);
+    expect(unsatisfiable.headers["Content-Type"]).toBe("application/javascript; charset=utf-8");
     expect(unsatisfiable.headers["Content-Range"]).toBe("bytes */10");
     expect(unsatisfiable.body).toHaveLength(0);
   });
@@ -913,6 +914,7 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     await tryServeStatic(emptyReq, emptyRes, clientDir, "/empty.txt", false);
     await empty.ended;
     expect(empty.status).toBe(416);
+    expect(empty.headers["Content-Type"]).toBe("text/plain; charset=utf-8");
     expect(empty.headers["Content-Range"]).toBe("bytes */0");
 
     await writeFile(clientDir, "if-range.txt", "0123456789");

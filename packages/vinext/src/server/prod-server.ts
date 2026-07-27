@@ -668,6 +668,7 @@ async function tryServeStatic(
       res.writeHead(416, {
         ...entry.notModifiedHeaders,
         ...extraHeaders,
+        "Content-Type": entry.original.headers["Content-Type"],
         "Accept-Ranges": "bytes",
         "Content-Range": `bytes */${entry.original.size}`,
       });
