@@ -16,6 +16,8 @@ describe("matchesIfNoneMatch", () => {
   });
 
   it("does not split commas inside an opaque tag", () => {
+    // RFC 9110 permits commas in opaque tags. This is intentionally stricter
+    // than Next.js 16.2.7's compiled `fresh` parser, which splits every comma.
     expect(matchesIfNoneMatch('"other", W/"asset,part"', '"asset,part"')).toBe(true);
     expect(matchesIfNoneMatch('"asset,part"', '"asset"')).toBe(false);
   });
