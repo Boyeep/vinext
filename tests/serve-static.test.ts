@@ -426,6 +426,124 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     expect(captured.status).toBe(200);
   });
 
+  it("returns 304 when a cached asset has not changed since If-Modified-Since", async () => {
+    await writeFile(clientDir, "conditional.txt", "cached content");
+    const cache = await StaticFileCache.create(clientDir);
+    const entry = cache.lookup("/conditional.txt")!;
+    const req = mockReq(undefined, {
+      "if-modified-since": entry.original.headers["Last-Modified"],
+    });
+    const { res, captured } = mockRes();
+
+    await tryServeStatic(req, res, clientDir, "/conditional.txt", true, cache);
+    await captured.ended;
+
+    expect(captured.status).toBe(304);
+    expect(captured.headers["Last-Modified"]).toBe(entry.original.headers["Last-Modified"]);
+  });
+
+  it("honors Cache-Control: no-cache when a cached asset ETag matches", async () => {
+    await writeFile(clientDir, "forced-revalidation.txt", "cached content");
+    const cache = await StaticFileCache.create(clientDir);
+    const entry = cache.lookup("/forced-revalidation.txt")!;
+    const req = mockReq(undefined, {
+      "cache-control": "no-cache",
+      "if-none-match": entry.etag,
+    });
+    const { res, captured } = mockRes();
+
+    await tryServeStatic(req, res, clientDir, "/forced-revalidation.txt", true, cache);
+    await captured.ended;
+
+    expect(captured.status).toBe(200);
+    expect(captured.body.toString()).toBe("cached content");
+  });
+
+  it("evaluates cached preconditions before Range", async () => {
+    await writeFile(clientDir, "conditional-range.txt", "0123456789");
+    const cache = await StaticFileCache.create(clientDir);
+    const entry = cache.lookup("/conditional-range.txt")!;
+    const req = mockReq(undefined, {
+      "if-none-match": entry.etag,
+      range: "bytes=0-2",
+    });
+    const { res, captured } = mockRes();
+
+    await tryServeStatic(req, res, clientDir, "/conditional-range.txt", true, cache);
+    await captured.ended;
+
+    expect(captured.status).toBe(304);
+    expect(captured.headers["Content-Range"]).toBeUndefined();
+    expect(captured.body).toHaveLength(0);
+  });
+
+  it("returns 412 before evaluating a cached Range when If-Match fails", async () => {
+    await writeFile(clientDir, "if-match-range.txt", "0123456789");
+    const cache = await StaticFileCache.create(clientDir);
+    const req = mockReq(undefined, {
+      "if-match": '"different"',
+      range: "bytes=0-2",
+    });
+    const { res, captured } = mockRes();
+
+    await tryServeStatic(req, res, clientDir, "/if-match-range.txt", true, cache);
+    await captured.ended;
+
+    expect(captured.status).toBe(412);
+    expect(captured.headers["Content-Type"]).toBe("text/plain; charset=utf-8");
+    expect(captured.headers["Accept-Ranges"]).toBe("bytes");
+    expect(captured.headers["Content-Range"]).toBeUndefined();
+    expect(captured.body).toHaveLength(0);
+  });
+
+  it("returns 405 before evaluating conditions on an unsupported cached request", async () => {
+    await writeFile(clientDir, "unsafe-conditional.txt", "cached content");
+    const cache = await StaticFileCache.create(clientDir);
+    const entry = cache.lookup("/unsafe-conditional.txt")!;
+    const req = mockReq(undefined, { "if-none-match": entry.etag }, "POST");
+    const { res, captured } = mockRes();
+
+    await tryServeStatic(req, res, clientDir, "/unsafe-conditional.txt", true, cache);
+    await captured.ended;
+
+    expect(captured.status).toBe(405);
+    expect(captured.headers.Allow).toBe("GET, HEAD");
+    expect(captured.body.toString()).toBe("Method Not Allowed");
+  });
+
+  it("evaluates conditions against validators overridden by response headers", async () => {
+    await writeFile(clientDir, "custom-validator.txt", "cached content");
+    const cache = await StaticFileCache.create(clientDir);
+    const req = mockReq(undefined, { "if-none-match": '"custom"' });
+    const { res, captured } = mockRes();
+
+    await tryServeStatic(req, res, clientDir, "/custom-validator.txt", true, cache, {
+      etag: '"custom"',
+    });
+    await captured.ended;
+
+    expect(captured.status).toBe(304);
+    expect(captured.headers.etag).toBe('"custom"');
+    expect(captured.body).toHaveLength(0);
+  });
+
+  it("ignores If-Unmodified-Since when a cached response overrides Last-Modified invalidly", async () => {
+    await writeFile(clientDir, "invalid-last-modified.txt", "cached content");
+    const cache = await StaticFileCache.create(clientDir);
+    const req = mockReq(undefined, {
+      "if-unmodified-since": "Thu, 01 Jan 1970 00:00:00 GMT",
+    });
+    const { res, captured } = mockRes();
+
+    await tryServeStatic(req, res, clientDir, "/invalid-last-modified.txt", true, cache, {
+      "Last-Modified": "not-a-date",
+    });
+    await captured.ended;
+
+    expect(captured.status).toBe(200);
+    expect(captured.body.toString()).toBe("cached content");
+  });
+
   it("304 response excludes Content-Type per RFC 9110", async () => {
     await writeFile(clientDir, "_next/static/rfc-aaa111.js", "rfc content");
 
@@ -712,6 +830,72 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     expect(captured.headers.Vary).toBeUndefined();
   });
 
+  it("serves cached ranges with conditional precedence and lossless large integers", async () => {
+    const relativePath = "_next/static/range-aaa111.js";
+    const content = "0123456789";
+    await writeFile(clientDir, relativePath, content);
+    await writeFile(clientDir, `${relativePath}.br`, zlib.brotliCompressSync(content));
+    const cache = await StaticFileCache.create(clientDir);
+
+    const initialReq = mockReq();
+    const { res: initialRes, captured: initial } = mockRes();
+    await tryServeStatic(initialReq, initialRes, clientDir, `/${relativePath}`, true, cache);
+    await initial.ended;
+
+    const conditionalReq = mockReq(undefined, {
+      range: "bytes=2-9007199254740992",
+      "if-none-match": initial.headers.ETag as string,
+    });
+    const { res: conditionalRes, captured: conditional } = mockRes();
+    await tryServeStatic(
+      conditionalReq,
+      conditionalRes,
+      clientDir,
+      `/${relativePath}`,
+      true,
+      cache,
+    );
+    await conditional.ended;
+    expect(conditional.status).toBe(304);
+    expect(conditional.body).toHaveLength(0);
+
+    const rangeReq = mockReq("br, gzip", { range: "bytes=2-9007199254740992" });
+    const { res: rangeRes, captured: range } = mockRes();
+    await tryServeStatic(rangeReq, rangeRes, clientDir, `/${relativePath}`, true, cache);
+    await range.ended;
+    expect(range.status).toBe(206);
+    expect(range.headers["Content-Range"]).toBe("bytes 2-9/10");
+    expect(range.headers["Content-Length"]).toBe("8");
+    expect(range.headers["Content-Encoding"]).toBeUndefined();
+    expect(range.headers.Vary).toBe("Accept-Encoding");
+    expect(range.body.toString()).toBe("23456789");
+
+    const unsatisfiableReq = mockReq(undefined, { range: "bytes=9007199254740992-" });
+    const { res: unsatisfiableRes, captured: unsatisfiable } = mockRes();
+    await tryServeStatic(
+      unsatisfiableReq,
+      unsatisfiableRes,
+      clientDir,
+      `/${relativePath}`,
+      true,
+      cache,
+    );
+    await unsatisfiable.ended;
+    expect(unsatisfiable.status).toBe(416);
+    expect(unsatisfiable.headers["Content-Type"]).toBe("application/javascript; charset=utf-8");
+    expect(unsatisfiable.headers["Content-Range"]).toBe("bytes */10");
+    expect(unsatisfiable.body).toHaveLength(0);
+
+    const headReq = mockReq(undefined, { range: "bytes=2-5" }, "HEAD");
+    const { res: headRes, captured: head } = mockRes();
+    await tryServeStatic(headReq, headRes, clientDir, `/${relativePath}`, true, cache);
+    await head.ended;
+    expect(head.status).toBe(206);
+    expect(head.headers["Content-Range"]).toBe("bytes 2-5/10");
+    expect(head.headers["Content-Length"]).toBe("4");
+    expect(head.body).toHaveLength(0);
+  });
+
   // ── Slow path (no cache) ───────────────────────────────────────
 
   it("slow path serves static file without cache", async () => {
@@ -733,6 +917,60 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     expect(captured.status).toBe(200);
     expect(captured.headers["Content-Type"]).toBe("application/javascript; charset=utf-8");
     expect(captured.body.toString()).toBe("slow path content");
+  });
+
+  it("slow path rejects ranges for empty files and ignores invalid If-Range dates", async () => {
+    await writeFile(clientDir, "empty.txt", "");
+    const emptyReq = mockReq(undefined, { range: "bytes=-9007199254740992" });
+    const { res: emptyRes, captured: empty } = mockRes();
+    await tryServeStatic(emptyReq, emptyRes, clientDir, "/empty.txt", false);
+    await empty.ended;
+    expect(empty.status).toBe(416);
+    expect(empty.headers["Content-Type"]).toBe("text/plain; charset=utf-8");
+    expect(empty.headers["Content-Range"]).toBe("bytes */0");
+
+    await writeFile(clientDir, "if-range.txt", "0123456789");
+    const invalidDateReq = mockReq(undefined, {
+      range: "bytes=2-5",
+      "if-range": "Sun, 31 Feb 2099 00:00:00 GMT",
+    });
+    const { res: invalidDateRes, captured: invalidDate } = mockRes();
+    await tryServeStatic(invalidDateReq, invalidDateRes, clientDir, "/if-range.txt", false);
+    await invalidDate.ended;
+    expect(invalidDate.status).toBe(200);
+    expect(invalidDate.headers["Content-Range"]).toBeUndefined();
+    expect(invalidDate.body.toString()).toBe("0123456789");
+
+    const rangeReq = mockReq("br", { range: "bytes=2-5" });
+    const { res: rangeRes, captured: range } = mockRes();
+    await tryServeStatic(rangeReq, rangeRes, clientDir, "/if-range.txt", true);
+    await range.ended;
+    expect(range.status).toBe(206);
+    expect(range.headers.Vary).toBe("Accept-Encoding");
+    expect(range.headers["Content-Encoding"]).toBeUndefined();
+    expect(range.body.toString()).toBe("2345");
+
+    const headReq = mockReq(undefined, { range: "bytes=2-5" }, "HEAD");
+    const { res: headRes, captured: head } = mockRes();
+    await tryServeStatic(headReq, headRes, clientDir, "/if-range.txt", true);
+    await head.ended;
+    expect(head.status).toBe(206);
+    expect(head.headers["Content-Range"]).toBe("bytes 2-5/10");
+    expect(head.headers["Content-Length"]).toBe("4");
+    expect(head.body).toHaveLength(0);
+  });
+
+  it("returns 405 before evaluating conditions on an unsupported slow request", async () => {
+    await writeFile(clientDir, "unsafe-slow.txt", "slow content");
+    const req = mockReq(undefined, { "if-none-match": "*" }, "POST");
+    const { res, captured } = mockRes();
+
+    await tryServeStatic(req, res, clientDir, "/unsafe-slow.txt", true);
+    await captured.ended;
+
+    expect(captured.status).toBe(405);
+    expect(captured.headers.Allow).toBe("GET, HEAD");
+    expect(captured.body.toString()).toBe("Method Not Allowed");
   });
 
   it("slow path does not vary non-compressible files", async () => {
@@ -1071,6 +1309,8 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     await captured.ended;
     expect(captured.status).toBe(304);
     expect(captured.headers["Vary"]).toBe("Accept-Encoding");
+    expect(captured.headers["Content-Type"]).toBeUndefined();
+    expect(captured.headers["Accept-Ranges"]).toBeUndefined();
   });
 
   it("returns slow-path 304 via identity fallback when codings are refused", async () => {
@@ -1083,6 +1323,92 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     await captured.ended;
     expect(captured.status).toBe(304);
     expect(captured.headers.Vary).toBe("Accept-Encoding");
+  });
+
+  it("supports If-Modified-Since on the slow path", async () => {
+    await writeFile(clientDir, "conditional-slow.txt", "slow content");
+    const stat = await fsp.stat(path.join(clientDir, "conditional-slow.txt"));
+    const req = mockReq(undefined, {
+      "if-modified-since": new Date(stat.mtimeMs).toUTCString(),
+    });
+    const { res, captured } = mockRes();
+
+    await tryServeStatic(req, res, clientDir, "/conditional-slow.txt", true);
+    await captured.ended;
+
+    expect(captured.status).toBe(304);
+    expect(captured.headers["Last-Modified"]).toBe(new Date(stat.mtimeMs).toUTCString());
+  });
+
+  it("honors Cache-Control: no-cache on the slow path", async () => {
+    await writeFile(clientDir, "_next/static/no-cache-slow-abc123.js", "slow content");
+    const req = mockReq(undefined, {
+      "cache-control": "no-cache",
+      "if-none-match": 'W/"abc123"',
+    });
+    const { res, captured } = mockRes();
+
+    await tryServeStatic(req, res, clientDir, "/_next/static/no-cache-slow-abc123.js", true);
+    await captured.ended;
+
+    expect(captured.status).toBe(200);
+    expect(captured.body.toString()).toBe("slow content");
+  });
+
+  it("evaluates slow-path preconditions before Range", async () => {
+    const relativePath = "conditional-range-slow.txt";
+    await writeFile(clientDir, relativePath, "0123456789");
+    const stat = await fsp.stat(path.join(clientDir, relativePath));
+    const etag = `W/"${stat.size}-${Math.floor(stat.mtimeMs / 1000)}"`;
+    const req = mockReq(undefined, {
+      "if-none-match": etag,
+      range: "bytes=0-2",
+    });
+    const { res, captured } = mockRes();
+
+    await tryServeStatic(req, res, clientDir, `/${relativePath}`, true);
+    await captured.ended;
+
+    expect(captured.status).toBe(304);
+    expect(captured.headers["Content-Range"]).toBeUndefined();
+    expect(captured.body).toHaveLength(0);
+  });
+
+  it("returns 412 before evaluating a slow-path Range when If-Unmodified-Since fails", async () => {
+    const relativePath = "if-unmodified-since-slow.txt";
+    await writeFile(clientDir, relativePath, "0123456789");
+    const stat = await fsp.stat(path.join(clientDir, relativePath));
+    const req = mockReq(undefined, {
+      "if-unmodified-since": new Date(stat.mtimeMs - 2_000).toUTCString(),
+      range: "bytes=0-2",
+    });
+    const { res, captured } = mockRes();
+
+    await tryServeStatic(req, res, clientDir, `/${relativePath}`, true);
+    await captured.ended;
+
+    expect(captured.status).toBe(412);
+    expect(captured.headers["Content-Type"]).toBe("text/plain; charset=utf-8");
+    expect(captured.headers["Accept-Ranges"]).toBe("bytes");
+    expect(captured.headers["Content-Range"]).toBeUndefined();
+    expect(captured.body).toHaveLength(0);
+  });
+
+  it("ignores If-Unmodified-Since when a slow response overrides Last-Modified invalidly", async () => {
+    const relativePath = "invalid-last-modified-slow.txt";
+    await writeFile(clientDir, relativePath, "slow content");
+    const req = mockReq(undefined, {
+      "if-unmodified-since": "Thu, 01 Jan 1970 00:00:00 GMT",
+    });
+    const { res, captured } = mockRes();
+
+    await tryServeStatic(req, res, clientDir, `/${relativePath}`, true, undefined, {
+      "Last-Modified": "not-a-date",
+    });
+    await captured.ended;
+
+    expect(captured.status).toBe(200);
+    expect(captured.body.toString()).toBe("slow content");
   });
 
   it("slow path 304 omits Vary for non-compressible content (compress=false)", async () => {

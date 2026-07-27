@@ -76,6 +76,7 @@ describe("StaticFileCache", () => {
     expect(entry).toBeDefined();
     expect(entry!.original.headers["Content-Type"]).toBe("application/javascript; charset=utf-8");
     expect(entry!.original.headers["Content-Length"]).toBe("12"); // "const x = 1;"
+    expect(Date.parse(entry!.original.headers["Last-Modified"])).not.toBeNaN();
     expect(entry!.original.path).toBe(
       toSlash(path.join(clientDir, "_next/static/index-abc123.js")),
     );
