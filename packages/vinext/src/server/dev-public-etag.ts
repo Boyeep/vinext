@@ -20,7 +20,7 @@ type DevPublicPathNode = {
   asciiAliases: Map<string, DevPublicPathNode | null>;
   unicodeAliases: Map<string, DevPublicAliasCandidate[] | null>;
   realPath?: string | null;
-  redirect?: string;
+  redirect?: string | null;
 };
 
 type DevPublicAliasCandidate = {
@@ -272,7 +272,7 @@ function indexRequestPath(
   }
   if (redirect) {
     if (node.redirect === undefined || node.redirect === redirect) node.redirect = redirect;
-    else node.realPath = null;
+    else node.redirect = null;
   }
 }
 

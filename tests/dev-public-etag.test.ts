@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -120,6 +120,61 @@ describe("resolveDevPublicIfNoneMatch", () => {
       }
     },
   );
+
+  it("fails closed when one request path has conflicting symlink targets", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-public-etag-redirect-conflict-"));
+    const publicDir = path.join(root, "public");
+    const firstTarget = path.join(root, "first.js");
+    const secondTarget = path.join(root, "second.js");
+    const aliasPath = path.join(publicDir, "alias.js");
+    try {
+      fs.mkdirSync(publicDir);
+      fs.writeFileSync(firstTarget, "first");
+      fs.writeFileSync(secondTarget, "second");
+
+      // Model a filesystem race where the same directory entry resolves to
+      // different symlink targets across observations during the startup scan.
+      const originalReaddirSync = fs.readdirSync;
+      const readdirSpy = vi.spyOn(fs, "readdirSync").mockImplementation(((dir, options) => {
+        if (toSlash(String(dir)) !== toSlash(publicDir)) {
+          return originalReaddirSync(dir, options as never);
+        }
+        const entry = {
+          name: "alias.js",
+          isSymbolicLink: () => true,
+          isDirectory: () => false,
+          isFile: () => false,
+        };
+        return [entry, entry];
+      }) as typeof fs.readdirSync);
+      const originalRealpathNative = fs.realpathSync.native;
+      let aliasResolutionCount = 0;
+      const realpathSpy = vi.spyOn(fs.realpathSync, "native").mockImplementation((filePath) => {
+        if (toSlash(String(filePath)) === toSlash(aliasPath)) {
+          return aliasResolutionCount++ === 0 ? firstTarget : secondTarget;
+        }
+        return originalRealpathNative(filePath);
+      });
+      const originalStatSync = fs.statSync;
+      const statSpy = vi
+        .spyOn(fs, "statSync")
+        .mockImplementation((filePath, options) =>
+          toSlash(String(filePath)) === toSlash(aliasPath)
+            ? originalStatSync(firstTarget, options)
+            : originalStatSync(filePath, options),
+        );
+
+      const index = createDevPublicFileEtags(publicDir, false, false, true);
+      statSpy.mockRestore();
+      realpathSpy.mockRestore();
+      readdirSpy.mockRestore();
+
+      expect(resolveDevPublicIfNoneMatch("GET", "/alias.js", "*", index)).toBeUndefined();
+    } finally {
+      vi.restoreAllMocks();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it.runIf(process.platform !== "win32")(
     "updates files reported through a directory symlink's real path",
