@@ -7,12 +7,19 @@ import { normalizePath } from "./normalize-path.js";
 export type DevPublicFileEtagIndex = {
   publicDir: string;
   etagsByRealPath: Map<string, string>;
-  requestPathRealPaths: Map<string, string | null>;
+  requestPathRoot: DevPublicPathNode;
   symlinkTargets: Map<string, string>;
   hasSymlink: boolean;
   viteUsesStatLookup: boolean;
   caseInsensitive: boolean;
   normalizationInsensitive: boolean;
+};
+
+export type DevPublicPathNode = {
+  children: Map<string, DevPublicPathNode | null>;
+  aliases: Map<string, DevPublicPathNode | null>;
+  realPath?: string | null;
+  redirect?: string;
 };
 
 export function createDevPublicFileEtags(
@@ -25,7 +32,7 @@ export function createDevPublicFileEtags(
   const index: DevPublicFileEtagIndex = {
     publicDir,
     etagsByRealPath: new Map(),
-    requestPathRealPaths: new Map(),
+    requestPathRoot: createPathNode(),
     symlinkTargets: new Map(),
     hasSymlink: false,
     viteUsesStatLookup: false,
@@ -172,42 +179,9 @@ export function resolveDevPublicIfNoneMatch(
   // lets sirv consult the filesystem, which may then accept case aliases.
   const supportsFoldedLookup =
     index.viteUsesStatLookup && (index.caseInsensitive || index.normalizationInsensitive);
-  let realPath = supportsFoldedLookup ? resolveRequestPath(index, filePath) : undefined;
-  filePath = resolveSymlinkTargets(filePath, index.symlinkTargets, index.caseInsensitive);
-  realPath ??= supportsFoldedLookup ? resolveRequestPath(index, filePath) : undefined;
-
+  const realPath = resolveRequestPath(index, filePath, supportsFoldedLookup);
   const etag = index.etagsByRealPath.get(realPath ?? filePath);
   return etag && matchesIfNoneMatch(ifNoneMatch, etag) ? etag : undefined;
-}
-
-function resolveSymlinkTargets(
-  filePath: string,
-  targets: ReadonlyMap<string, string>,
-  caseInsensitive: boolean,
-): string {
-  const seen = new Set<string>();
-  while (!seen.has(filePath)) {
-    seen.add(filePath);
-    let matchedSource: string | undefined;
-    const fileSegments = filePath.split("/");
-    for (const source of targets.keys()) {
-      const sourceSegments = source.split("/");
-      if (sourceSegments.length > fileSegments.length) continue;
-      const matches = sourceSegments.every((segment, index) => {
-        const fileSegment = fileSegments[index]!;
-        return caseInsensitive
-          ? asciiCaseKey(fileSegment) === asciiCaseKey(segment)
-          : fileSegment === segment;
-      });
-      if (matches && (!matchedSource || sourceSegments.length > matchedSource.split("/").length)) {
-        matchedSource = source;
-      }
-    }
-    if (!matchedSource) break;
-    const suffix = fileSegments.slice(matchedSource.split("/").length).join("/");
-    filePath = path.join(targets.get(matchedSource)!, suffix);
-  }
-  return filePath;
 }
 
 function isWithinPublicDir(publicDir: string, filePath: string): boolean {
@@ -233,24 +207,7 @@ function indexFileEtag(
   requestPath: string,
 ): void {
   index.etagsByRealPath.set(realPath, etag);
-  indexRequestPath(index, requestPath, realPath);
-  for (const alias of verifiedRequestAliases(index, requestPath, realPath)) {
-    indexRequestPath(index, alias, realPath);
-  }
-}
-
-function indexRequestPath(
-  index: DevPublicFileEtagIndex,
-  requestPath: string,
-  realPath: string,
-): void {
-  const key = requestPathKey(requestPath, index.caseInsensitive);
-  const existing = index.requestPathRealPaths.get(key);
-  if (existing === undefined || existing === realPath) {
-    index.requestPathRealPaths.set(key, realPath);
-  } else {
-    index.requestPathRealPaths.set(key, null);
-  }
+  indexRequestPath(index, requestPath, realPath, undefined);
 }
 
 function indexSymlinkTarget(
@@ -259,23 +216,56 @@ function indexSymlinkTarget(
   realTarget: string,
 ): void {
   index.symlinkTargets.set(requestPath, realTarget);
-  for (const alias of verifiedRequestAliases(index, requestPath, realTarget)) {
-    index.symlinkTargets.set(alias, realTarget);
+  indexRequestPath(index, requestPath, undefined, realTarget);
+}
+
+function indexRequestPath(
+  index: DevPublicFileEtagIndex,
+  requestPath: string,
+  realPath: string | undefined,
+  redirect: string | undefined,
+): void {
+  const relativePath = path.relative(index.publicDir, requestPath);
+  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) return;
+
+  const segments = relativePath.split("/");
+  const variantsBySegment = verifiedSegmentVariants(index, requestPath, realPath ?? redirect!);
+  let node = index.requestPathRoot;
+  for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex++) {
+    const segment = segments[segmentIndex]!;
+    let child = node.children.get(segment);
+    if (child === null) return;
+    if (!child) {
+      child = createPathNode();
+      node.children.set(segment, child);
+    }
+    if (index.caseInsensitive) {
+      indexPathAlias(node, asciiCaseKey(segment), child);
+    }
+    for (const variant of variantsBySegment[segmentIndex]!) {
+      indexPathAlias(node, requestPathKey(variant, index.caseInsensitive), child);
+    }
+    node = child;
+  }
+
+  if (realPath) {
+    if (node.realPath === undefined || node.realPath === realPath) node.realPath = realPath;
+    else node.realPath = null;
+  }
+  if (redirect) {
+    if (node.redirect === undefined || node.redirect === redirect) node.redirect = redirect;
+    else node.realPath = null;
   }
 }
 
-function verifiedRequestAliases(
+function verifiedSegmentVariants(
   index: DevPublicFileEtagIndex,
   requestPath: string,
   realPath: string,
-): string[] {
+): string[][] {
   const relativePath = path.relative(index.publicDir, requestPath);
-  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) return [];
-
   const segments = relativePath.split("/");
-  const aliases: string[] = [];
-  for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex++) {
-    const segment = segments[segmentIndex]!;
+  return segments.map((segment, segmentIndex) => {
     const candidates = new Set<string>();
     if (index.caseInsensitive) {
       candidates.add(segment.toUpperCase());
@@ -291,15 +281,23 @@ function verifiedRequestAliases(
         candidates.add(candidate.toLowerCase());
       }
     }
+
+    const verified: string[] = [];
     for (const candidate of candidates) {
-      if (candidate === segment) continue;
+      if (candidate === segment || asciiCaseKey(candidate) === asciiCaseKey(segment)) continue;
       const aliasSegments = segments.slice();
       aliasSegments[segmentIndex] = candidate;
       const alias = path.join(index.publicDir, aliasSegments.join("/"));
-      if (resolvesToSamePath(realPath, alias)) aliases.push(alias);
+      if (resolvesToSamePath(realPath, alias)) verified.push(candidate);
     }
-  }
-  return aliases;
+    return verified;
+  });
+}
+
+function indexPathAlias(parent: DevPublicPathNode, key: string, child: DevPublicPathNode): void {
+  const existing = parent.aliases.get(key);
+  if (existing === undefined || existing === child) parent.aliases.set(key, child);
+  else parent.aliases.set(key, null);
 }
 
 function requestPathsForRealPath(
@@ -320,11 +318,72 @@ function requestPathsForRealPath(
 function resolveRequestPath(
   index: DevPublicFileEtagIndex,
   requestPath: string,
+  useAliases: boolean,
 ): string | undefined {
-  const realPath = index.requestPathRealPaths.get(
-    requestPathKey(requestPath, index.caseInsensitive),
-  );
-  return realPath ?? undefined;
+  const relativePath = path.relative(index.publicDir, requestPath);
+  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) return undefined;
+  return resolvePathSegments(index, relativePath.split("/"), useAliases, new Set());
+}
+
+function resolvePathSegments(
+  index: DevPublicFileEtagIndex,
+  segments: string[],
+  useAliases: boolean,
+  seenRedirects: Set<string>,
+): string | undefined {
+  let node = index.requestPathRoot;
+  for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex++) {
+    const segment = segments[segmentIndex]!;
+    const exact = node.children.get(segment);
+    const child =
+      exact === undefined && useAliases
+        ? node.aliases.get(requestPathKey(segment, index.caseInsensitive))
+        : exact;
+    if (!child) {
+      return node.redirect
+        ? resolveRedirect(
+            index,
+            node.redirect,
+            segments.slice(segmentIndex),
+            useAliases,
+            seenRedirects,
+          )
+        : undefined;
+    }
+    node = child;
+  }
+  if (typeof node.realPath === "string") return node.realPath;
+  return node.redirect
+    ? resolveRedirect(index, node.redirect, [], useAliases, seenRedirects)
+    : undefined;
+}
+
+function resolveRedirect(
+  index: DevPublicFileEtagIndex,
+  redirect: string,
+  remaining: string[],
+  useAliases: boolean,
+  seenRedirects: Set<string>,
+): string | undefined {
+  const marker = redirect + "\0" + remaining.join("/");
+  if (seenRedirects.has(marker)) return undefined;
+  seenRedirects.add(marker);
+
+  const relativeTarget = path.relative(index.publicDir, redirect);
+  if (!relativeTarget.startsWith("..") && !path.isAbsolute(relativeTarget)) {
+    return resolvePathSegments(
+      index,
+      [...relativeTarget.split("/"), ...remaining],
+      useAliases,
+      seenRedirects,
+    );
+  }
+  const physicalPath = path.join(redirect, remaining.join("/"));
+  return index.etagsByRealPath.has(physicalPath) ? physicalPath : undefined;
+}
+
+function createPathNode(): DevPublicPathNode {
+  return { children: new Map(), aliases: new Map() };
 }
 
 function detectCaseInsensitiveDirectory(externalDir: string): boolean {

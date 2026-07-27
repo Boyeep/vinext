@@ -77,6 +77,8 @@ describe("dev public ETag Vite configuration", () => {
       fs.writeFileSync(unicodeFile, "unicode");
       fs.writeFileSync(sharpSFile, "sharp-s");
       fs.writeFileSync(dotlessIFile, "dotless-i");
+      fs.mkdirSync(path.join(publicDir, "Straße"));
+      fs.writeFileSync(path.join(publicDir, "Straße", "Maße.js"), "nested-sharp-s");
       fs.symlinkSync("missing", path.join(publicDir, "0-broken"));
 
       const lowerCaseFile = path.join(publicDir, "mixedCase.js");
@@ -89,6 +91,16 @@ describe("dev public ETag Vite configuration", () => {
         (
           await fetch(`${baseUrl}/mixedcase.js`, {
             headers: { "If-None-Match": mixedEtag!.replace(/^W\//, "") },
+          })
+        ).status,
+      ).toBe(304);
+
+      const nestedEtag = (await fetch(`${baseUrl}/Stra%C3%9Fe/Ma%C3%9Fe.js`)).headers.get("etag");
+      expect(nestedEtag).toMatch(/^W\//);
+      expect(
+        (
+          await fetch(`${baseUrl}/STRASSE/MASSE.js`, {
+            headers: { "If-None-Match": nestedEtag!.replace(/^W\//, "") },
           })
         ).status,
       ).toBe(304);

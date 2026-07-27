@@ -14,7 +14,7 @@ const ETAG = 'W/"90-1234"';
 const publicEtags: DevPublicFileEtagIndex = {
   publicDir: "/public",
   etagsByRealPath: new Map([["/public/asset.js", ETAG]]),
-  requestPathRealPaths: new Map(),
+  requestPathRoot: { children: new Map(), aliases: new Map() },
   symlinkTargets: new Map(),
   hasSymlink: false,
   viteUsesStatLookup: false,
@@ -197,7 +197,7 @@ describe("resolveDevPublicIfNoneMatch", () => {
         ["/public/A.js", 'W/"5-1"'],
         ["/public/a.js", 'W/"5-2"'],
       ]),
-      requestPathRealPaths: new Map([["/public/a.js", null]]),
+      requestPathRoot: { children: new Map(), aliases: new Map([["a.js", null]]) },
       symlinkTargets: new Map([["/public/alias", "/public/A.js"]]),
       hasSymlink: true,
       viteUsesStatLookup: true,
@@ -315,7 +315,7 @@ describe("resolveDevPublicIfNoneMatch", () => {
     const nestedEtags: DevPublicFileEtagIndex = {
       publicDir: "/public",
       etagsByRealPath: new Map([["/public/foo/bar.js", ETAG]]),
-      requestPathRealPaths: new Map(),
+      requestPathRoot: { children: new Map(), aliases: new Map() },
       symlinkTargets: new Map(),
       hasSymlink: false,
       viteUsesStatLookup: false,
