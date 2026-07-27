@@ -1695,6 +1695,34 @@ describe("readPagesRouterEntrySource", () => {
     expect(await resolved!.text()).toBe("<svg />");
   });
 
+  it("preserves partial asset status over a middleware status override", async () => {
+    const signalResponse = new Response(null, {
+      status: 403,
+      headers: {
+        "x-vinext-static-file": encodeURIComponent("/asset.txt"),
+        "x-middleware": "blocked",
+      },
+    });
+
+    const resolved = await resolveStaticAssetSignal(signalResponse, {
+      fetchAsset: async () =>
+        new Response("par", {
+          status: 206,
+          headers: {
+            "content-length": "3",
+            "content-range": "bytes 0-2/7",
+          },
+        }),
+    });
+
+    expect(resolved).not.toBeNull();
+    expect(resolved!.status).toBe(206);
+    expect(resolved!.headers.get("content-length")).toBe("3");
+    expect(resolved!.headers.get("content-range")).toBe("bytes 0-2/7");
+    expect(resolved!.headers.get("x-middleware")).toBe("blocked");
+    expect(await resolved!.text()).toBe("par");
+  });
+
   it("retargets Worker assets without dropping conditional and range fields", () => {
     const source = new Request("https://example.com/rewrite", {
       method: "HEAD",

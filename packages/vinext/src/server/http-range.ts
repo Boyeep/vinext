@@ -54,6 +54,8 @@ export function parseByteRange(value: string | undefined, size: number): ByteRan
 /**
  * If-Range requires strong entity-tag comparison. Date validators are matched
  * at HTTP-date (whole-second) precision because filesystem mtimes are finer.
+ * Vinext's static ETags are currently weak, so its emitted Last-Modified value
+ * is the validator that can enable a range response on a later request.
  */
 export function ifRangeAllowsRange(
   value: string | undefined,
