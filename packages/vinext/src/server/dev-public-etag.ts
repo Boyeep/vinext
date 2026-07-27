@@ -10,6 +10,7 @@ export type DevPublicFileEtagIndex = {
   foldedRealPaths: Map<string, string | null>;
   symlinkTargets: Map<string, string>;
   hasSymlink: boolean;
+  viteUsesStatLookup: boolean;
   caseInsensitive: boolean;
   normalizationInsensitive: boolean;
 };
@@ -18,6 +19,7 @@ export function createDevPublicFileEtags(
   externalPublicDir: string,
   caseInsensitive = detectCaseInsensitiveDirectory(externalPublicDir),
   normalizationInsensitive = detectNormalizationInsensitiveDirectory(externalPublicDir),
+  viteUsesStatLookup?: boolean,
 ): DevPublicFileEtagIndex {
   const publicDir = toSlash(externalPublicDir);
   const index: DevPublicFileEtagIndex = {
@@ -26,6 +28,7 @@ export function createDevPublicFileEtags(
     foldedRealPaths: new Map(),
     symlinkTargets: new Map(),
     hasSymlink: false,
+    viteUsesStatLookup: false,
     caseInsensitive,
     normalizationInsensitive,
   };
@@ -86,6 +89,7 @@ export function createDevPublicFileEtags(
     if (realPublicDir !== publicDir) index.symlinkTargets.set(publicDir, realPublicDir);
     walk(publicDir, new Set());
   }
+  index.viteUsesStatLookup = viteUsesStatLookup ?? index.hasSymlink;
   return index;
 }
 
@@ -164,7 +168,7 @@ export function resolveDevPublicIfNoneMatch(
   // disables that optimization when the public tree contains a symlink and
   // lets sirv consult the filesystem, which may then accept case aliases.
   const supportsFoldedLookup =
-    index.hasSymlink && (index.caseInsensitive || index.normalizationInsensitive);
+    index.viteUsesStatLookup && (index.caseInsensitive || index.normalizationInsensitive);
   filePath = resolveSymlinkTargets(
     filePath,
     index.symlinkTargets,
@@ -233,6 +237,7 @@ function etagForStats(stats: fs.Stats): string {
 function indexFileEtag(index: DevPublicFileEtagIndex, realPath: string, etag: string): void {
   index.etagsByRealPath.set(realPath, etag);
   if (!index.caseInsensitive && !index.normalizationInsensitive) return;
+  if (!hasVerifiedFoldedAlias(index, realPath)) return;
 
   const foldedPath = foldPath(realPath, index.caseInsensitive, index.normalizationInsensitive);
   const existing = index.foldedRealPaths.get(foldedPath);
@@ -244,6 +249,18 @@ function indexFileEtag(index: DevPublicFileEtagIndex, realPath: string, etag: st
     // usable; ambiguous folded spellings fail closed.
     index.foldedRealPaths.set(foldedPath, null);
   }
+}
+
+function hasVerifiedFoldedAlias(index: DevPublicFileEtagIndex, realPath: string): boolean {
+  let alias = realPath;
+  if (index.normalizationInsensitive) {
+    alias = alternateNormalization(alias) ?? alias;
+  }
+  if (index.caseInsensitive) {
+    const upper = alias.toUpperCase();
+    alias = upper === alias ? alias.toLowerCase() : upper;
+  }
+  return alias !== realPath && resolvesToSamePath(realPath, alias);
 }
 
 function detectCaseInsensitiveDirectory(externalDir: string): boolean {

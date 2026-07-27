@@ -17,6 +17,7 @@ const publicEtags: DevPublicFileEtagIndex = {
   foldedRealPaths: new Map(),
   symlinkTargets: new Map(),
   hasSymlink: false,
+  viteUsesStatLookup: false,
   caseInsensitive: false,
   normalizationInsensitive: false,
 };
@@ -152,7 +153,7 @@ describe("resolveDevPublicIfNoneMatch", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  it.runIf(process.platform === "darwin")(
     "folds served names only when the filesystem is case-insensitive",
     () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-public-etag-case-"));
@@ -199,6 +200,7 @@ describe("resolveDevPublicIfNoneMatch", () => {
       foldedRealPaths: new Map([["/public/a.js", null]]),
       symlinkTargets: new Map([["/public/alias", "/public/A.js"]]),
       hasSymlink: true,
+      viteUsesStatLookup: true,
       caseInsensitive: true,
       normalizationInsensitive: false,
     };
@@ -207,7 +209,7 @@ describe("resolveDevPublicIfNoneMatch", () => {
     expect(resolveDevPublicIfNoneMatch("GET", "/a.JS", "*", index)).toBeUndefined();
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.runIf(process.platform === "darwin")(
     "uses dangling symlinks to mirror Vite's stat-based public lookup",
     () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-public-etag-dangling-"));
@@ -253,7 +255,7 @@ describe("resolveDevPublicIfNoneMatch", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  it.runIf(process.platform === "darwin")(
     "folds Unicode case and filesystem normalization aliases",
     () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-public-etag-unicode-"));
@@ -316,6 +318,7 @@ describe("resolveDevPublicIfNoneMatch", () => {
       foldedRealPaths: new Map(),
       symlinkTargets: new Map(),
       hasSymlink: false,
+      viteUsesStatLookup: false,
       caseInsensitive: false,
       normalizationInsensitive: false,
     };

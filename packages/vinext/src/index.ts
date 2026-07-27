@@ -4290,7 +4290,12 @@ export const loadServerActionClient = ${
         const updateDevPublicEtag = (filePath: string) => {
           if (!devPublicFileEtags || !devPublicDir) return;
           if (!updateDevPublicFileEtag(devPublicFileEtags, filePath)) {
-            devPublicFileEtags = createDevPublicFileEtags(devPublicDir);
+            devPublicFileEtags = createDevPublicFileEtags(
+              devPublicDir,
+              undefined,
+              undefined,
+              devPublicFileEtags.viteUsesStatLookup,
+            );
           }
         };
         server.watcher.on("add", updateDevPublicEtag);

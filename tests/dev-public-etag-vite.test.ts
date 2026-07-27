@@ -72,9 +72,11 @@ describe("dev public ETag Vite configuration", () => {
       const mixedCaseFile = path.join(publicDir, "MixedCase.js");
       const unicodeFile = path.join(publicDir, "Éclair.js");
       const sharpSFile = path.join(publicDir, "Straße.js");
+      const dotlessIFile = path.join(publicDir, "ı.js");
       fs.writeFileSync(mixedCaseFile, "mixed");
       fs.writeFileSync(unicodeFile, "unicode");
       fs.writeFileSync(sharpSFile, "sharp-s");
+      fs.writeFileSync(dotlessIFile, "dotless-i");
       fs.symlinkSync("missing", path.join(publicDir, "0-broken"));
 
       const lowerCaseFile = path.join(publicDir, "mixedCase.js");
@@ -90,6 +92,16 @@ describe("dev public ETag Vite configuration", () => {
           })
         ).status,
       ).toBe(304);
+
+      const dotlessIEtag = (await fetch(`${baseUrl}/%C4%B1.js`)).headers.get("etag");
+      expect(dotlessIEtag).toMatch(/^W\//);
+      const dottedFallback = await fetch(`${baseUrl}/i.js`, {
+        headers: { "If-None-Match": dotlessIEtag!.replace(/^W\//, "") },
+      });
+      expect(dottedFallback.status).toBe(200);
+      expect(dottedFallback.headers.get("x-fallback-if-none-match")).toBe(
+        dotlessIEtag!.replace(/^W\//, ""),
+      );
 
       const unicodeEtag = (await fetch(`${baseUrl}/%C3%89clair.js`)).headers.get("etag");
       expect(unicodeEtag).toMatch(/^W\//);
@@ -174,6 +186,56 @@ describe("dev public ETag Vite configuration", () => {
       expect(fallback.status).toBe(200);
       expect(fallback.headers.get("x-fallback-if-none-match")).toBe(strong);
       expect(await fallback.text()).toBe("fallback");
+    },
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "keeps Vite's exact public lookup mode when a symlink is added later",
+    async () => {
+      const root = createRoot();
+      const publicDir = path.join(root, "public");
+      fs.mkdirSync(publicDir);
+      fs.writeFileSync(path.join(publicDir, "MixedCase.js"), "content");
+
+      const baseUrl = await startServer(root, "public");
+      const initial = await fetch(`${baseUrl}/MixedCase.js`);
+      const strong = initial.headers.get("etag")!.replace(/^W\//, "");
+      fs.symlinkSync("MixedCase.js", path.join(publicDir, "alias.js"));
+      await expect.poll(async () => (await fetch(`${baseUrl}/alias.js`)).status).toBe(200);
+
+      const fallback = await fetch(`${baseUrl}/mixedcase.js`, {
+        headers: { "If-None-Match": strong },
+      });
+      expect(fallback.status).toBe(200);
+      expect(fallback.headers.get("x-fallback-if-none-match")).toBe(strong);
+    },
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "keeps Vite's stat lookup mode when its startup symlink is removed",
+    async () => {
+      const root = createRoot();
+      const publicDir = path.join(root, "public");
+      fs.mkdirSync(publicDir);
+      fs.writeFileSync(path.join(publicDir, "MixedCase.js"), "content");
+      const alias = path.join(publicDir, "alias.js");
+      fs.symlinkSync("MixedCase.js", alias);
+
+      const baseUrl = await startServer(root, "public");
+      const initial = await fetch(`${baseUrl}/MixedCase.js`);
+      const strong = initial.headers.get("etag")!.replace(/^W\//, "");
+      fs.rmSync(alias);
+
+      await expect
+        .poll(
+          async () =>
+            (
+              await fetch(`${baseUrl}/mixedcase.js`, {
+                headers: { "If-None-Match": strong },
+              })
+            ).status,
+        )
+        .toBe(304);
     },
   );
 });
