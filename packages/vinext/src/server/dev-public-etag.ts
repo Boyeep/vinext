@@ -441,7 +441,7 @@ function resolveRedirect(
   if (!relativeTarget.startsWith("..") && !path.isAbsolute(relativeTarget)) {
     return resolvePathSegments(
       index,
-      [...relativeTarget.split("/"), ...remaining],
+      [...(relativeTarget ? relativeTarget.split("/") : []), ...remaining],
       useAliases,
       seenRedirects,
     );

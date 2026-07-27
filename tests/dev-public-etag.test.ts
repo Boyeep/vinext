@@ -97,7 +97,9 @@ describe("resolveDevPublicIfNoneMatch", () => {
   it.runIf(process.platform !== "win32")(
     "preserves directory symlink aliases without following cycles",
     () => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-public-etag-alias-"));
+      const root = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), "vinext-public-etag-alias-")),
+      );
       const publicDir = path.join(root, "public");
       try {
         fs.mkdirSync(path.join(publicDir, "a"), { recursive: true });
