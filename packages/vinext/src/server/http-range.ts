@@ -116,9 +116,20 @@ function parseHttpDate(value: string): number {
 
   const rfc850 = RFC850_DATE_RE.exec(value);
   if (rfc850) {
-    const currentYear = new Date().getUTCFullYear();
-    let year = currentYear - (currentYear % 100) + Number(rfc850[4]);
-    if (year > currentYear + 50) year -= 100;
+    const now = new Date();
+    let year = now.getUTCFullYear() - (now.getUTCFullYear() % 100) + Number(rfc850[4]);
+    const candidateTimestamp = timestampFromHttpDateParts(
+      undefined,
+      rfc850[2],
+      rfc850[3],
+      String(year),
+      rfc850[5],
+      rfc850[6],
+      rfc850[7],
+    );
+    const fiftyYearsFromNow = new Date(now);
+    fiftyYearsFromNow.setUTCFullYear(now.getUTCFullYear() + 50);
+    if (candidateTimestamp > fiftyYearsFromNow.getTime()) year -= 100;
     return timestampFromHttpDateParts(
       rfc850[1],
       rfc850[2],
@@ -147,7 +158,7 @@ function parseHttpDate(value: string): number {
 }
 
 function timestampFromHttpDateParts(
-  weekday: string,
+  weekday: string | undefined,
   dayValue: string,
   monthValue: string,
   yearValue: string,
@@ -172,7 +183,7 @@ function timestampFromHttpDateParts(
     date.getUTCHours() !== hour ||
     date.getUTCMinutes() !== minute ||
     date.getUTCSeconds() !== second ||
-    date.getUTCDay() !== WEEKDAY_INDEX[weekday]
+    (weekday !== undefined && date.getUTCDay() !== WEEKDAY_INDEX[weekday])
   ) {
     return Number.NaN;
   }

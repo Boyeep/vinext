@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ifRangeAllowsRange, parseByteRange } from "../packages/vinext/src/server/http-range.js";
 
 describe("parseByteRange", () => {
@@ -77,5 +77,28 @@ describe("ifRangeAllowsRange", () => {
   it("accepts obsolete HTTP-date formats required for recipients", () => {
     expect(ifRangeAllowsRange("Thursday, 01-Jan-26 00:00:00 GMT", '"asset"', mtimeMs)).toBe(true);
     expect(ifRangeAllowsRange("Thu Jan  1 00:00:00 2026", '"asset"', mtimeMs)).toBe(true);
+  });
+
+  it("resolves an RFC 850 year from the full 50-year timestamp boundary", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-27T12:00:00Z");
+    try {
+      expect(
+        ifRangeAllowsRange(
+          "Thursday, 31-Dec-76 00:00:00 GMT",
+          '"asset"',
+          Date.parse("2076-12-31T00:00:00Z"),
+        ),
+      ).toBe(false);
+      expect(
+        ifRangeAllowsRange(
+          "Friday, 31-Dec-76 00:00:00 GMT",
+          '"asset"',
+          Date.parse("1976-12-31T00:00:00Z"),
+        ),
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
