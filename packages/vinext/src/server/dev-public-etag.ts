@@ -17,10 +17,25 @@ export type DevPublicFileEtagIndex = {
 
 export type DevPublicPathNode = {
   children: Map<string, DevPublicPathNode | null>;
-  aliases: Map<string, DevPublicPathNode | null>;
+  asciiAliases: Map<string, DevPublicPathNode | null>;
+  unicodeAliases: Map<string, DevPublicAliasCandidate[] | null>;
   realPath?: string | null;
   redirect?: string;
 };
+
+type DevPublicAliasCandidate = {
+  segment: string;
+  node: DevPublicPathNode;
+};
+
+const unicodeBaseCollator = new Intl.Collator("und", {
+  usage: "search",
+  sensitivity: "base",
+});
+const unicodeAccentCollator = new Intl.Collator("und", {
+  usage: "search",
+  sensitivity: "accent",
+});
 
 export function createDevPublicFileEtags(
   externalPublicDir: string,
@@ -229,10 +244,8 @@ function indexRequestPath(
   if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) return;
 
   const segments = relativePath.split("/");
-  const variantsBySegment = verifiedSegmentVariants(index, requestPath, realPath ?? redirect!);
   let node = index.requestPathRoot;
-  for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex++) {
-    const segment = segments[segmentIndex]!;
+  for (const segment of segments) {
     let child = node.children.get(segment);
     if (child === null) return;
     if (!child) {
@@ -240,10 +253,13 @@ function indexRequestPath(
       node.children.set(segment, child);
     }
     if (index.caseInsensitive) {
-      indexPathAlias(node, asciiCaseKey(segment), child);
+      indexAsciiAlias(node, asciiCaseKey(segment), child);
     }
-    for (const variant of variantsBySegment[segmentIndex]!) {
-      indexPathAlias(node, requestPathKey(variant, index.caseInsensitive), child);
+    if (index.caseInsensitive || index.normalizationInsensitive) {
+      indexUnicodeAlias(node, unicodeBucketKey(segment, index.normalizationInsensitive), {
+        segment,
+        node: child,
+      });
     }
     node = child;
   }
@@ -258,46 +274,33 @@ function indexRequestPath(
   }
 }
 
-function verifiedSegmentVariants(
-  index: DevPublicFileEtagIndex,
-  requestPath: string,
-  realPath: string,
-): string[][] {
-  const relativePath = path.relative(index.publicDir, requestPath);
-  const segments = relativePath.split("/");
-  return segments.map((segment, segmentIndex) => {
-    const candidates = new Set<string>();
-    if (index.caseInsensitive) {
-      candidates.add(segment.toUpperCase());
-      candidates.add(segment.toLowerCase());
-    }
-    if (index.normalizationInsensitive) {
-      candidates.add(segment.normalize("NFD"));
-      candidates.add(segment.normalize("NFC"));
-    }
-    for (const candidate of candidates) {
-      if (index.caseInsensitive) {
-        candidates.add(candidate.toUpperCase());
-        candidates.add(candidate.toLowerCase());
-      }
-    }
-
-    const verified: string[] = [];
-    for (const candidate of candidates) {
-      if (candidate === segment || asciiCaseKey(candidate) === asciiCaseKey(segment)) continue;
-      const aliasSegments = segments.slice();
-      aliasSegments[segmentIndex] = candidate;
-      const alias = path.join(index.publicDir, aliasSegments.join("/"));
-      if (resolvesToSamePath(realPath, alias)) verified.push(candidate);
-    }
-    return verified;
-  });
+function indexAsciiAlias(parent: DevPublicPathNode, key: string, child: DevPublicPathNode): void {
+  const existing = parent.asciiAliases.get(key);
+  if (existing === undefined || existing === child) parent.asciiAliases.set(key, child);
+  else parent.asciiAliases.set(key, null);
 }
 
-function indexPathAlias(parent: DevPublicPathNode, key: string, child: DevPublicPathNode): void {
-  const existing = parent.aliases.get(key);
-  if (existing === undefined || existing === child) parent.aliases.set(key, child);
-  else parent.aliases.set(key, null);
+function indexUnicodeAlias(
+  parent: DevPublicPathNode,
+  key: string,
+  candidate: DevPublicAliasCandidate,
+): void {
+  const existing = parent.unicodeAliases.get(key);
+  if (existing === null) return;
+  if (!existing) {
+    parent.unicodeAliases.set(key, [candidate]);
+    return;
+  }
+  if (
+    existing.some((entry) => entry.node === candidate.node && entry.segment === candidate.segment)
+  ) {
+    return;
+  }
+  if (existing.length === 8) {
+    parent.unicodeAliases.set(key, null);
+    return;
+  }
+  existing.push(candidate);
 }
 
 function requestPathsForRealPath(
@@ -335,10 +338,11 @@ function resolvePathSegments(
   for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex++) {
     const segment = segments[segmentIndex]!;
     const exact = node.children.get(segment);
-    const child =
-      exact === undefined && useAliases
-        ? node.aliases.get(requestPathKey(segment, index.caseInsensitive))
-        : exact;
+    let child = exact;
+    if (child === undefined && useAliases) {
+      if (index.caseInsensitive) child = node.asciiAliases.get(asciiCaseKey(segment));
+      if (child === undefined) child = resolveUnicodeAlias(index, node, segment);
+    }
     if (!child) {
       return node.redirect
         ? resolveRedirect(
@@ -356,6 +360,36 @@ function resolvePathSegments(
   return node.redirect
     ? resolveRedirect(index, node.redirect, [], useAliases, seenRedirects)
     : undefined;
+}
+
+function resolveUnicodeAlias(
+  index: DevPublicFileEtagIndex,
+  parent: DevPublicPathNode,
+  requestedSegment: string,
+): DevPublicPathNode | null | undefined {
+  const candidates = parent.unicodeAliases.get(
+    unicodeBucketKey(requestedSegment, index.normalizationInsensitive),
+  );
+  if (!candidates) return candidates;
+
+  let matched: DevPublicPathNode | undefined;
+  for (const candidate of candidates) {
+    if (!segmentsEquivalent(index, requestedSegment, candidate.segment)) continue;
+    if (matched && matched !== candidate.node) return null;
+    matched = candidate.node;
+  }
+  return matched;
+}
+
+function segmentsEquivalent(index: DevPublicFileEtagIndex, left: string, right: string): boolean {
+  const normalizedLeft = index.normalizationInsensitive ? left.normalize("NFD") : left;
+  const normalizedRight = index.normalizationInsensitive ? right.normalize("NFD") : right;
+  if (!index.caseInsensitive) return normalizedLeft === normalizedRight;
+
+  return (
+    unicodeAccentCollator.compare(normalizedLeft.toUpperCase(), normalizedRight.toUpperCase()) ===
+      0 && unicodeBaseCollator.compare(normalizedLeft, normalizedRight) === 0
+  );
 }
 
 function resolveRedirect(
@@ -383,7 +417,7 @@ function resolveRedirect(
 }
 
 function createPathNode(): DevPublicPathNode {
-  return { children: new Map(), aliases: new Map() };
+  return { children: new Map(), asciiAliases: new Map(), unicodeAliases: new Map() };
 }
 
 function detectCaseInsensitiveDirectory(externalDir: string): boolean {
@@ -474,8 +508,8 @@ function resolvesToSamePath(left: string, right: string): boolean {
   }
 }
 
-function requestPathKey(value: string, caseInsensitive: boolean): string {
-  return caseInsensitive ? asciiCaseKey(value) : value;
+function unicodeBucketKey(value: string, normalizationInsensitive: boolean): string {
+  return (normalizationInsensitive ? value.normalize("NFD") : value).toUpperCase();
 }
 
 function asciiCaseKey(value: string): string {

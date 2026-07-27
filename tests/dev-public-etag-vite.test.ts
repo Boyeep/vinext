@@ -73,10 +73,12 @@ describe("dev public ETag Vite configuration", () => {
       const unicodeFile = path.join(publicDir, "Éclair.js");
       const sharpSFile = path.join(publicDir, "Straße.js");
       const dotlessIFile = path.join(publicDir, "ı.js");
+      const sigmaFile = path.join(publicDir, "Σ.js");
       fs.writeFileSync(mixedCaseFile, "mixed");
       fs.writeFileSync(unicodeFile, "unicode");
       fs.writeFileSync(sharpSFile, "sharp-s");
       fs.writeFileSync(dotlessIFile, "dotless-i");
+      fs.writeFileSync(sigmaFile, "sigma");
       fs.mkdirSync(path.join(publicDir, "Straße"));
       fs.writeFileSync(path.join(publicDir, "Straße", "Maße.js"), "nested-sharp-s");
       fs.symlinkSync("missing", path.join(publicDir, "0-broken"));
@@ -91,6 +93,16 @@ describe("dev public ETag Vite configuration", () => {
         (
           await fetch(`${baseUrl}/mixedcase.js`, {
             headers: { "If-None-Match": mixedEtag!.replace(/^W\//, "") },
+          })
+        ).status,
+      ).toBe(304);
+
+      const sigmaEtag = (await fetch(`${baseUrl}/%CE%A3.js`)).headers.get("etag");
+      expect(sigmaEtag).toMatch(/^W\//);
+      expect(
+        (
+          await fetch(`${baseUrl}/%CF%82.js`, {
+            headers: { "If-None-Match": sigmaEtag!.replace(/^W\//, "") },
           })
         ).status,
       ).toBe(304);
