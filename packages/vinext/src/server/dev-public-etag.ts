@@ -15,7 +15,7 @@ export type DevPublicFileEtagIndex = {
   normalizationInsensitive: boolean;
 };
 
-export type DevPublicPathNode = {
+type DevPublicPathNode = {
   children: Map<string, DevPublicPathNode | null>;
   asciiAliases: Map<string, DevPublicPathNode | null>;
   unicodeAliases: Map<string, DevPublicAliasCandidate[] | null>;
