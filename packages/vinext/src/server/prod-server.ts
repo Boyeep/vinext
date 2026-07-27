@@ -640,7 +640,12 @@ async function tryServeStatic(
         : "proceed";
 
     if (preconditionResult === "precondition-failed") {
-      res.writeHead(412, { ...entry.notModifiedHeaders, ...extraHeaders });
+      res.writeHead(412, {
+        ...entry.notModifiedHeaders,
+        ...extraHeaders,
+        "Content-Type": entry.original.headers["Content-Type"],
+        "Accept-Ranges": "bytes",
+      });
       res.end();
       return true;
     }

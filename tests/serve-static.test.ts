@@ -490,6 +490,8 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     await captured.ended;
 
     expect(captured.status).toBe(412);
+    expect(captured.headers["Content-Type"]).toBe("text/plain; charset=utf-8");
+    expect(captured.headers["Accept-Ranges"]).toBe("bytes");
     expect(captured.headers["Content-Range"]).toBeUndefined();
     expect(captured.body).toHaveLength(0);
   });
@@ -1352,6 +1354,8 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     await captured.ended;
 
     expect(captured.status).toBe(412);
+    expect(captured.headers["Content-Type"]).toBe("text/plain; charset=utf-8");
+    expect(captured.headers["Accept-Ranges"]).toBe("bytes");
     expect(captured.headers["Content-Range"]).toBeUndefined();
     expect(captured.body).toHaveLength(0);
   });
