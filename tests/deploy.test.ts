@@ -1458,6 +1458,7 @@ describe("readPagesRouterEntrySource", () => {
     expect(content).toContain("serveFilesystemRoute: async");
     expect(content).toContain("fetchWorkerFilesystemRoute(");
     expect(content).toContain("env.ASSETS!.fetch(assetRequest)");
+    expect(content).toContain("publicFiles");
   });
 
   it("exports the built-in fetch handler and router-specific worker entries", () => {
@@ -1912,6 +1913,7 @@ describe("fetchWorkerFilesystemRoute", () => {
         "/file.txt",
         "direct",
         fetchAsset,
+        new Set(["/file.txt"]),
       );
 
       expect(result).toBeInstanceOf(Response);
@@ -1934,8 +1936,24 @@ describe("fetchWorkerFilesystemRoute", () => {
         "/missing.txt",
         "direct",
         fetchAsset,
+        new Set(["/missing.txt"]),
       ),
     ).resolves.toBe(false);
+  });
+
+  it("skips direct mutation probes when the pathname is not a public file", async () => {
+    const fetchAsset = vi.fn(async () => new Response(null, { status: 200 }));
+
+    await expect(
+      fetchWorkerFilesystemRoute(
+        new Request("https://example.com/checkout", { method: "POST", body: "order=1" }),
+        "/checkout",
+        "direct",
+        fetchAsset,
+        new Set(["/file.txt"]),
+      ),
+    ).resolves.toBe(false);
+    expect(fetchAsset).not.toHaveBeenCalled();
   });
 
   it("skips direct and API filesystem probes", async () => {

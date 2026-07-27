@@ -62,10 +62,12 @@ export async function fetchWorkerFilesystemRoute(
   requestPathname: string,
   phase: FilesystemRoutePhase,
   fetchAsset: (request: Request) => Promise<Response>,
+  publicFiles?: ReadonlySet<string>,
 ): Promise<Response | false> {
   const isRetrievalMethod = request.method === "GET" || request.method === "HEAD";
   if (
     (phase === "direct" && isRetrievalMethod) ||
+    (phase === "direct" && publicFiles !== undefined && !publicFiles.has(requestPathname)) ||
     requestPathname === "/api" ||
     requestPathname.startsWith("/api/")
   ) {

@@ -1521,13 +1521,18 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
    * Generate the virtual SSR server entry module.
    * This is the entry point for `vite build --ssr`.
    */
-  async function generateServerEntry(): Promise<string> {
+  async function generateServerEntry(configuredPublicDir: string | false): Promise<string> {
+    const publicFiles =
+      isServeCommand && devPublicFileRoutes
+        ? [...devPublicFileRoutes].sort()
+        : scanPublicFileRoutes(root, configuredPublicDir === "" ? false : configuredPublicDir);
     return _generateServerEntry(
       pagesDir,
       nextConfig,
       fileMatcher,
       middlewarePath,
       instrumentationPath,
+      publicFiles,
     );
   }
 
@@ -3703,7 +3708,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           }
           // Pages Router virtual modules
           if (id === RESOLVED_SERVER_ENTRY) {
-            return await generateServerEntry();
+            return await generateServerEntry(
+              this.environment.config.publicDir === "" ? false : this.environment.config.publicDir,
+            );
           }
           if (id === RESOLVED_CLIENT_ENTRY) {
             return await generateClientEntry();
@@ -4543,6 +4550,7 @@ export const loadServerActionClient = ${
           if (present) devPublicFileRoutes.add(route);
           else devPublicFileRoutes.delete(route);
           if (hasAppDir) invalidateRscEntryModule();
+          if (hasCloudflarePlugin && hasPagesDir && !hasAppDir) invalidatePagesServerEntry();
         };
 
         server.watcher.on("add", (filePath: string) => {
