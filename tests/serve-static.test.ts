@@ -136,6 +136,7 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     const served = await tryServeStatic(req, res, clientDir, "/robots.txt", true, undefined, {
       "X-From-Middleware": "preserved",
       "Set-Cookie": ["a=1", "b=2"],
+      "Content-Encoding": "gzip",
       "Content-Type": "application/wrong",
     });
     await captured.ended;
@@ -145,6 +146,7 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     expect(captured.headers.Allow).toBe("GET, HEAD");
     expect(captured.headers["X-From-Middleware"]).toBe("preserved");
     expect(captured.headers["Set-Cookie"]).toEqual(["a=1", "b=2"]);
+    expect(captured.headers["Content-Encoding"]).toBeUndefined();
     expect(captured.headers["Content-Type"]).toBe("text/plain; charset=utf-8");
     expect(captured.body.toString()).toBe("Method Not Allowed");
   });

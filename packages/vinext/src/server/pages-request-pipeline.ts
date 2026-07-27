@@ -80,7 +80,11 @@ export async function fetchWorkerFilesystemRoute(
   const response = await fetchAsset(assetRequest);
   if (response.status === 404) return false;
   if (!isRetrievalMethod) {
-    if (response.body && !response.body.locked) void response.body.cancel();
+    if (response.body && !response.body.locked) {
+      void response.body.cancel().catch(() => {
+        // Ignore cancellation failures for the discarded existence probe.
+      });
+    }
     return methodNotAllowedResponse("GET, HEAD");
   }
   return response;

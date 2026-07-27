@@ -421,8 +421,10 @@ function matchesIfNoneMatchHeader(ifNoneMatch: string | undefined, etag: string)
 
 const OMIT_METHOD_NOT_ALLOWED_HEADERS: ReadonlySet<string> = new Set([
   "allow",
+  "content-encoding",
   "content-length",
   "content-type",
+  "transfer-encoding",
 ]);
 
 function rejectUnsupportedStaticMethod(
