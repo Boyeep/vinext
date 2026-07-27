@@ -1099,7 +1099,9 @@ describe("pages page response", () => {
     expect(etagMatches('"abc123"', 'W/"abc123"')).toBe(true);
     expect(etagMatches('W/"abc123"', '"abc123"')).toBe(true);
     expect(etagMatches('"abc123"', '"abc123"')).toBe(true);
+    expect(etagMatches('"abc,123"', '"other", W/"abc,123"')).toBe(true);
     expect(etagMatches('"abc123"', '"other"')).toBe(false);
+    expect(etagMatches('"abc123"', '"abc123", garbage')).toBe(false);
     expect(etagMatches('"abc123"', "*")).toBe(true);
   });
 

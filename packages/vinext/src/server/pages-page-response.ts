@@ -33,6 +33,7 @@ import {
 } from "./pages-document-asset-props.js";
 import { isBotUserAgent } from "../utils/html-limited-bots.js";
 import { NEXTJS_CACHE_HEADER } from "./headers.js";
+import { matchesIfNoneMatch } from "./http-conditional.js";
 
 // ---------------------------------------------------------------------------
 // Bot / crawler detection for Pages Router edge-runtime SSR
@@ -62,24 +63,9 @@ export function generatePagesETag(payload: string): string {
 
 /**
  * Mirrors Next.js `sendEtagResponse` semantics (weak/strong comparison).
- *
- * A weak ETag `W/"..."` matches both `W/"..."` and `"..."` in `If-None-Match`.
- * A strong ETag `"..."` only matches the same strong token.
- * `*` always matches.
  */
 export function etagMatches(etag: string, ifNoneMatch: string): boolean {
-  if (ifNoneMatch === "*") return true;
-  // Normalise: strip the W/ prefix for comparison. Next.js's
-  // `sendEtagResponse` (packages/next/src/server/send-payload.ts) uses the
-  // `fresh` package, which treats a weak token in `If-None-Match` as matching
-  // the corresponding strong ETag and vice versa (RFC 7232 §2.3.2 weak
-  // comparison). We replicate that behaviour here.
-  const normalize = (t: string) => t.replace(/^W\//, "");
-  const etagNorm = normalize(etag.trim());
-  for (const token of ifNoneMatch.split(",")) {
-    if (normalize(token.trim()) === etagNorm) return true;
-  }
-  return false;
+  return matchesIfNoneMatch(ifNoneMatch, etag);
 }
 
 /**
