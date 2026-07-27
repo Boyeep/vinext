@@ -832,7 +832,9 @@ describe("tryServeStatic (with StaticFileCache)", () => {
 
   it("serves cached ranges with conditional precedence and lossless large integers", async () => {
     const relativePath = "_next/static/range-aaa111.js";
-    const content = "0123456789";
+    // Keep the compressed sidecar wire-beneficial so this still exercises
+    // range negotiation against an entry that varies by Accept-Encoding.
+    const content = "0123456789".repeat(100);
     await writeFile(clientDir, relativePath, content);
     await writeFile(clientDir, `${relativePath}.br`, zlib.brotliCompressSync(content));
     const cache = await StaticFileCache.create(clientDir);
@@ -864,11 +866,11 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     await tryServeStatic(rangeReq, rangeRes, clientDir, `/${relativePath}`, true, cache);
     await range.ended;
     expect(range.status).toBe(206);
-    expect(range.headers["Content-Range"]).toBe("bytes 2-9/10");
-    expect(range.headers["Content-Length"]).toBe("8");
+    expect(range.headers["Content-Range"]).toBe("bytes 2-999/1000");
+    expect(range.headers["Content-Length"]).toBe("998");
     expect(range.headers["Content-Encoding"]).toBeUndefined();
     expect(range.headers.Vary).toBe("Accept-Encoding");
-    expect(range.body.toString()).toBe("23456789");
+    expect(range.body.toString()).toBe(content.slice(2));
 
     const unsatisfiableReq = mockReq(undefined, { range: "bytes=9007199254740992-" });
     const { res: unsatisfiableRes, captured: unsatisfiable } = mockRes();
@@ -883,7 +885,7 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     await unsatisfiable.ended;
     expect(unsatisfiable.status).toBe(416);
     expect(unsatisfiable.headers["Content-Type"]).toBe("application/javascript; charset=utf-8");
-    expect(unsatisfiable.headers["Content-Range"]).toBe("bytes */10");
+    expect(unsatisfiable.headers["Content-Range"]).toBe("bytes */1000");
     expect(unsatisfiable.body).toHaveLength(0);
 
     const headReq = mockReq(undefined, { range: "bytes=2-5" }, "HEAD");
@@ -891,7 +893,7 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     await tryServeStatic(headReq, headRes, clientDir, `/${relativePath}`, true, cache);
     await head.ended;
     expect(head.status).toBe(206);
-    expect(head.headers["Content-Range"]).toBe("bytes 2-5/10");
+    expect(head.headers["Content-Range"]).toBe("bytes 2-5/1000");
     expect(head.headers["Content-Length"]).toBe("4");
     expect(head.body).toHaveLength(0);
   });
