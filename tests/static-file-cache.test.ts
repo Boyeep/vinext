@@ -114,13 +114,17 @@ describe("StaticFileCache", () => {
   });
 
   it("does not serve temporary files left by interrupted precompression", async () => {
-    const temporaryPath =
-      "_next/static/app-abc123.js.br.123.123e4567-e89b-42d3-a456-426614174000.tmp";
+    const basename = "app-abc123.js.br.123.123e4567-e89b-42d3-a456-426614174000.tmp";
+    const temporaryPath = `_next/static/${basename}`;
     await writeFile(clientDir, temporaryPath, "partial compressed content");
+    await writeFile(clientDir, `downloads/${basename}`, "legitimate public content");
 
     const cache = await StaticFileCache.create(clientDir);
 
     expect(cache.lookup("/" + temporaryPath)).toBeUndefined();
+    expect(cache.lookup(`/downloads/${basename}`)?.original.buffer?.toString()).toBe(
+      "legitimate public content",
+    );
   });
 
   it("sets immutable cache-control for hashed assets under /assets/", async () => {

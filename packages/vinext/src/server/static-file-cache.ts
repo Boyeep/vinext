@@ -119,15 +119,9 @@ export class StaticFileCache {
       )
         continue;
 
-      // A hard process exit can strand the temporary side of an atomic
-      // precompression write. Never register that internal artifact as a URL.
-      if (PRECOMPRESSION_TEMP_FILE_RE.test(relativePath)) continue;
-
       // Skip .vite/ internal directory
       if (relativePath.startsWith(".vite/") || relativePath === ".vite") continue;
 
-      const ext = path.extname(relativePath);
-      const contentType = CONTENT_TYPES[ext] ?? "application/octet-stream";
       // Files under Vite's `assetsDir` are content-hashed. The default
       // layout writes to `<ASSET_PREFIX_URL_DIR>/` (Next.js's canonical
       // convention); when `assetPrefix` is a path prefix the layout
@@ -144,6 +138,14 @@ export class StaticFileCache {
       const isHashed =
         relativePath.startsWith(`${ASSET_PREFIX_URL_DIR}/`) ||
         relativePath.includes(`/${ASSET_PREFIX_URL_DIR}/`);
+
+      // A hard process exit can strand the temporary side of an atomic
+      // precompression write. Never register that internal artifact as a URL,
+      // but preserve matching user files outside the precompression target.
+      if (isHashed && PRECOMPRESSION_TEMP_FILE_RE.test(relativePath)) continue;
+
+      const ext = path.extname(relativePath);
+      const contentType = CONTENT_TYPES[ext] ?? "application/octet-stream";
       const cacheControl = isHashed
         ? "public, max-age=31536000, immutable"
         : "public, max-age=3600";
