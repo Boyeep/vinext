@@ -677,6 +677,8 @@ async function tryServeStatic(
     }
 
     if (range.kind === "range") {
+      // Byte ranges always address the identity representation, regardless of
+      // the content encoding negotiated for a full response.
       const length = range.end - range.start + 1;
       const rangeHeaders = {
         ...entry.original.headers,
