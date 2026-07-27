@@ -71,8 +71,10 @@ describe("dev public ETag Vite configuration", () => {
       fs.mkdirSync(publicDir);
       const mixedCaseFile = path.join(publicDir, "MixedCase.js");
       const unicodeFile = path.join(publicDir, "Éclair.js");
+      const sharpSFile = path.join(publicDir, "Straße.js");
       fs.writeFileSync(mixedCaseFile, "mixed");
       fs.writeFileSync(unicodeFile, "unicode");
+      fs.writeFileSync(sharpSFile, "sharp-s");
       fs.symlinkSync("missing", path.join(publicDir, "0-broken"));
 
       const lowerCaseFile = path.join(publicDir, "mixedCase.js");
@@ -109,6 +111,46 @@ describe("dev public ETag Vite configuration", () => {
           ).status,
         ).toBe(304);
       }
+
+      const sharpSEtag = (await fetch(`${baseUrl}/Stra%C3%9Fe.js`)).headers.get("etag");
+      expect(sharpSEtag).toMatch(/^W\//);
+      expect(
+        (
+          await fetch(`${baseUrl}/STRASSE.js`, {
+            headers: { "If-None-Match": sharpSEtag!.replace(/^W\//, "") },
+          })
+        ).status,
+      ).toBe(304);
+    },
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "expands normalization semantics when a file is added after startup",
+    async () => {
+      const root = createRoot();
+      const publicDir = path.join(root, "public");
+      fs.mkdirSync(publicDir);
+      fs.writeFileSync(path.join(publicDir, "base.js"), "base");
+      fs.symlinkSync("missing", path.join(publicDir, "0-broken"));
+
+      const baseUrl = await startServer(root, "public");
+      fs.writeFileSync(path.join(publicDir, "Éclair.js"), "unicode");
+
+      await expect
+        .poll(
+          async () => {
+            const canonical = await fetch(`${baseUrl}/%C3%89clair.js`);
+            const etag = canonical.headers.get("etag");
+            if (!etag) return canonical.status;
+            return (
+              await fetch(`${baseUrl}/E%CC%81clair.js`, {
+                headers: { "If-None-Match": etag.replace(/^W\//, "") },
+              })
+            ).status;
+          },
+          { timeout: 5000 },
+        )
+        .toBe(304);
     },
   );
 

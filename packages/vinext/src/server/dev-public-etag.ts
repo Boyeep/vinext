@@ -118,6 +118,12 @@ export function updateDevPublicFileEtag(
   try {
     const lstat = fs.lstatSync(filePath);
     if (lstat.isSymbolicLink() || !lstat.isFile()) return false;
+    if (
+      (!index.caseInsensitive && pathHasCaseInsensitiveAlias(filePath)) ||
+      (!index.normalizationInsensitive && pathHasNormalizationInsensitiveAlias(filePath))
+    ) {
+      return false;
+    }
     const realPath = toSlash(fs.realpathSync.native(filePath));
     indexFileEtag(index, realPath, etagForStats(fs.statSync(filePath)));
     return true;
@@ -157,18 +163,19 @@ export function resolveDevPublicIfNoneMatch(
   // Vite normally guards public requests with an exact-spelling file set. It
   // disables that optimization when the public tree contains a symlink and
   // lets sirv consult the filesystem, which may then accept case aliases.
-  const supportsFoldedLookup = index.caseInsensitive && index.hasSymlink;
+  const supportsFoldedLookup =
+    index.hasSymlink && (index.caseInsensitive || index.normalizationInsensitive);
   filePath = resolveSymlinkTargets(
     filePath,
     index.symlinkTargets,
-    supportsFoldedLookup,
+    index.caseInsensitive,
     index.normalizationInsensitive,
   );
 
   let etag = index.etagsByRealPath.get(filePath);
   if (!etag && supportsFoldedLookup) {
     const canonicalPath = index.foldedRealPaths.get(
-      foldPath(filePath, index.normalizationInsensitive),
+      foldPath(filePath, index.caseInsensitive, index.normalizationInsensitive),
     );
     if (canonicalPath) etag = index.etagsByRealPath.get(canonicalPath);
   }
@@ -191,9 +198,9 @@ function resolveSymlinkTargets(
       if (sourceSegments.length > fileSegments.length) continue;
       const matches = sourceSegments.every((segment, index) => {
         const fileSegment = fileSegments[index]!;
-        return caseInsensitive
-          ? foldPath(fileSegment, normalizationInsensitive) ===
-              foldPath(segment, normalizationInsensitive)
+        return caseInsensitive || normalizationInsensitive
+          ? foldPath(fileSegment, caseInsensitive, normalizationInsensitive) ===
+              foldPath(segment, caseInsensitive, normalizationInsensitive)
           : fileSegment === segment;
       });
       if (matches && (!matchedSource || sourceSegments.length > matchedSource.split("/").length)) {
@@ -225,9 +232,9 @@ function etagForStats(stats: fs.Stats): string {
 
 function indexFileEtag(index: DevPublicFileEtagIndex, realPath: string, etag: string): void {
   index.etagsByRealPath.set(realPath, etag);
-  if (!index.caseInsensitive) return;
+  if (!index.caseInsensitive && !index.normalizationInsensitive) return;
 
-  const foldedPath = foldPath(realPath, index.normalizationInsensitive);
+  const foldedPath = foldPath(realPath, index.caseInsensitive, index.normalizationInsensitive);
   const existing = index.foldedRealPaths.get(foldedPath);
   if (existing === undefined || existing === realPath) {
     index.foldedRealPaths.set(foldedPath, realPath);
@@ -247,17 +254,13 @@ function detectCaseInsensitiveDirectory(externalDir: string): boolean {
   } catch {
     return false;
   }
+  const entryNames = new Set(entries.map((entry) => entry.name));
 
   for (const entry of entries) {
     const toggledName = toggleAsciiCase(entry.name);
     if (!toggledName) continue;
-    try {
-      const actual = toSlash(fs.realpathSync.native(path.join(dir, entry.name)));
-      const toggled = toSlash(fs.realpathSync.native(path.join(dir, toggledName)));
-      return actual === toggled;
-    } catch {
-      continue;
-    }
+    if (entryNames.has(toggledName)) return false;
+    if (pathHasCaseInsensitiveAlias(path.join(dir, entry.name))) return true;
   }
 
   const basename = path.basename(dir);
@@ -281,16 +284,14 @@ function detectNormalizationInsensitiveDirectory(externalDir: string): boolean {
   } catch {
     return false;
   }
+  const entryNames = new Set(entries.map((entry) => entry.name));
 
   for (const entry of entries) {
     const alternateName = alternateNormalization(entry.name);
     if (!alternateName) continue;
-    try {
-      const actual = toSlash(fs.realpathSync.native(path.join(dir, entry.name)));
-      const alternate = toSlash(fs.realpathSync.native(path.join(dir, alternateName)));
-      return actual === alternate;
-    } catch {
-      continue;
+    if (entryNames.has(alternateName)) return false;
+    if (pathHasNormalizationInsensitiveAlias(path.join(dir, entry.name))) {
+      return true;
     }
   }
   return false;
@@ -311,6 +312,35 @@ function alternateNormalization(value: string): string | undefined {
   return composed !== value ? composed : undefined;
 }
 
-function foldPath(value: string, normalizationInsensitive: boolean): string {
-  return (normalizationInsensitive ? value.normalize("NFD") : value).toLowerCase();
+function pathHasCaseInsensitiveAlias(filePath: string): boolean {
+  const toggledName = toggleAsciiCase(path.basename(filePath));
+  return toggledName
+    ? resolvesToSamePath(filePath, path.join(path.dirname(filePath), toggledName))
+    : false;
+}
+
+function pathHasNormalizationInsensitiveAlias(filePath: string): boolean {
+  const alternateName = alternateNormalization(path.basename(filePath));
+  return alternateName
+    ? resolvesToSamePath(filePath, path.join(path.dirname(filePath), alternateName))
+    : false;
+}
+
+function resolvesToSamePath(left: string, right: string): boolean {
+  try {
+    return toSlash(fs.realpathSync.native(left)) === toSlash(fs.realpathSync.native(right));
+  } catch {
+    return false;
+  }
+}
+
+function foldPath(
+  value: string,
+  caseInsensitive: boolean,
+  normalizationInsensitive: boolean,
+): string {
+  const normalized = normalizationInsensitive ? value.normalize("NFD") : value;
+  // Uppercase expansion followed by lowercase approximates Unicode's full
+  // default case fold (for example ß/SS and final sigma) using built-in data.
+  return caseInsensitive ? normalized.toUpperCase().toLowerCase() : normalized;
 }

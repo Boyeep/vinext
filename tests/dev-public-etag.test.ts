@@ -261,11 +261,48 @@ describe("resolveDevPublicIfNoneMatch", () => {
       try {
         fs.mkdirSync(publicDir);
         fs.writeFileSync(path.join(publicDir, "Éclair.js"), "content");
+        fs.writeFileSync(path.join(publicDir, "Straße.js"), "content");
         fs.symlinkSync("Éclair.js", path.join(publicDir, "alias.js"));
 
         const index = createDevPublicFileEtags(publicDir, true, true);
         expect(resolveDevPublicIfNoneMatch("GET", "/%C3%A9clair.js", "*", index)).toMatch(/^W\//);
         expect(resolveDevPublicIfNoneMatch("GET", "/e%CC%81clair.js", "*", index)).toMatch(/^W\//);
+        expect(resolveDevPublicIfNoneMatch("GET", "/STRASSE.js", "*", index)).toMatch(/^W\//);
+
+        const normalizationOnlyIndex = createDevPublicFileEtags(publicDir, false, true);
+        expect(
+          resolveDevPublicIfNoneMatch("GET", "/E%CC%81clair.js", "*", normalizationOnlyIndex),
+        ).toMatch(/^W\//);
+        expect(
+          resolveDevPublicIfNoneMatch("GET", "/e%CC%81clair.js", "*", normalizationOnlyIndex),
+        ).toBeUndefined();
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not infer insensitive semantics from distinct aliases to one target",
+    () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-public-etag-alias-probe-"));
+      const publicDir = path.join(root, "public");
+      try {
+        fs.mkdirSync(publicDir);
+        fs.writeFileSync(path.join(publicDir, "target.js"), "content");
+        fs.symlinkSync("target.js", path.join(publicDir, "alias"));
+        try {
+          fs.symlinkSync("target.js", path.join(publicDir, "Alias"));
+          fs.symlinkSync("target.js", path.join(publicDir, "É"));
+          fs.symlinkSync("target.js", path.join(publicDir, "E\u0301"));
+        } catch {
+          return;
+        }
+
+        const index = createDevPublicFileEtags(publicDir);
+        expect(index.caseInsensitive).toBe(false);
+        expect(index.normalizationInsensitive).toBe(false);
+        expect(resolveDevPublicIfNoneMatch("GET", "/ALIAS", "*", index)).toBeUndefined();
       } finally {
         fs.rmSync(root, { recursive: true, force: true });
       }
