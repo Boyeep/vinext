@@ -58,6 +58,7 @@ import {
 } from "../packages/vinext/src/shims/headers.js";
 import { isPromiseLike } from "../packages/vinext/src/utils/promise.js";
 import { isUnknownRecord } from "../packages/vinext/src/utils/record.js";
+import { extractRscCompletionMetadata } from "../packages/vinext/src/server/rsc-completion-metadata.js";
 
 type TestRoute = {
   __buildTimeClassifications?: ReadonlyMap<number, "static" | "dynamic"> | null;
@@ -776,7 +777,7 @@ describe("app page dispatch", () => {
     await expect(response.text()).resolves.toBe("<html>page</html>");
     await Promise.all(waitUntilPromises.splice(0));
     expect(isrSet).toHaveBeenCalledTimes(1);
-    const [cacheKey, cacheValue, revalidateSeconds, tags, expireSeconds] = isrSet.mock.calls[0]!;
+    const [cacheKey, cacheValue, cachePolicy] = isrSet.mock.calls[0]!;
     expect(cacheKey).toBe("html:/posts/hello");
     expect(cacheValue).toMatchObject({
       kind: "APP_PAGE",
@@ -784,9 +785,9 @@ describe("app page dispatch", () => {
         requestApis: expect.arrayContaining([{ kind: "searchParams", status: "notObserved" }]),
       },
     });
-    expect(revalidateSeconds).toBe(60);
-    expect(tags).toEqual(expect.arrayContaining(["_N_T_/posts/hello"]));
-    expect(expireSeconds).toBeUndefined();
+    expect(cachePolicy.cacheControl.revalidate).toBe(60);
+    expect(cachePolicy.tags).toEqual(expect.arrayContaining(["_N_T_/posts/hello"]));
+    expect(cachePolicy.cacheControl.expire).toBeUndefined();
   });
 
   it("does not reuse queryless HTML when the page reads searchParams", async () => {
@@ -1308,10 +1309,15 @@ describe("app page dispatch", () => {
       const response = await runWithExecutionContext(executionContext, () =>
         dispatchAppPage(options),
       );
-      const text = await response.text();
+      const completed = extractRscCompletionMetadata(await response.arrayBuffer());
       await Promise.all(waitUntilPromises.splice(0));
       expect(response.headers.get("x-vinext-cache")).not.toBe("HIT");
-      return text;
+      expect(response.headers.get("x-vinext-rsc-completion-metadata")).toBe("1");
+      expect(completed.metadata).toEqual({
+        dynamicStaleTimeSeconds: 0,
+        serverStaleTimeSeconds: null,
+      });
+      return new TextDecoder().decode(completed.buffer);
     }
 
     await expect(request("first")).resolves.toBe("first");

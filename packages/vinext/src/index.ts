@@ -247,6 +247,8 @@ import {
   resolveDevPublicIfNoneMatch,
   updateDevPublicFileEtag,
 } from "./server/dev-public-etag.js";
+import { publicFilePathVariants } from "./utils/public-file-path.js";
+import { methodNotAllowedResponse } from "./server/http-error-responses.js";
 import type { Options as VitePluginReactOptions } from "@vitejs/plugin-react";
 import MagicString from "magic-string";
 import path, { toSlash } from "pathslash";
@@ -1463,6 +1465,11 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let pagesOptimizeEntries: string[] = [];
   const pagesClientAssetsOutputDirs = new Set<string>();
   let pagesClientAssetsModule: string | null = null;
+  // Dev-only public route inventory. Vite's watcher keeps this synchronized,
+  // so request handling can use O(1) membership checks without filesystem I/O.
+  // Production builds leave it null and scan the configured public directory
+  // once while generating the RSC entry.
+  let devPublicFileRoutes: Set<string> | null = null;
   let rscCompatibilityId: string | undefined;
   let draftModeSecret = getPagesPreviewModeId();
   let previewBuildCredentials: PreviewBuildCredentials | undefined;
@@ -1520,13 +1527,18 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
    * Generate the virtual SSR server entry module.
    * This is the entry point for `vite build --ssr`.
    */
-  async function generateServerEntry(): Promise<string> {
+  async function generateServerEntry(configuredPublicDir: string | false): Promise<string> {
+    const publicFiles =
+      isServeCommand && devPublicFileRoutes
+        ? [...devPublicFileRoutes].sort()
+        : scanPublicFileRoutes(root, configuredPublicDir === "" ? false : configuredPublicDir);
     return _generateServerEntry(
       pagesDir,
       nextConfig,
       fileMatcher,
       middlewarePath,
       instrumentationPath,
+      publicFiles,
     );
   }
 
@@ -3702,7 +3714,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           }
           // Pages Router virtual modules
           if (id === RESOLVED_SERVER_ENTRY) {
-            return await generateServerEntry();
+            return await generateServerEntry(
+              this.environment.config.publicDir === "" ? false : this.environment.config.publicDir,
+            );
           }
           if (id === RESOLVED_CLIENT_ENTRY) {
             return await generateClientEntry();
@@ -3800,7 +3814,15 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
                   contentSecurityPolicy: nextConfig?.images?.contentSecurityPolicy,
                 },
                 hasPagesDir,
-                publicFiles: scanPublicFileRoutes(root),
+                publicFiles:
+                  isServeCommand && devPublicFileRoutes
+                    ? [...devPublicFileRoutes].sort()
+                    : scanPublicFileRoutes(
+                        root,
+                        this.environment.config.publicDir === ""
+                          ? false
+                          : this.environment.config.publicDir,
+                      ),
                 globalNotFoundPath,
                 draftModeSecret,
               },
@@ -4262,8 +4284,10 @@ export const loadServerActionClient = ${
       },
 
       configureServer(server: ViteDevServer) {
-        const devPublicDir = server.config.publicDir || undefined;
-        let devPublicFileEtags = devPublicDir ? createDevPublicFileEtags(devPublicDir) : undefined;
+        const etagPublicDir = server.config.publicDir || undefined;
+        let devPublicFileEtags = etagPublicDir
+          ? createDevPublicFileEtags(etagPublicDir)
+          : undefined;
 
         server.middlewares.use((req, _res, next) => {
           req.__vinextOriginalEncodedUrl ??= req.url;
@@ -4288,10 +4312,10 @@ export const loadServerActionClient = ${
         });
 
         const updateDevPublicEtag = (filePath: string) => {
-          if (!devPublicFileEtags || !devPublicDir) return;
+          if (!devPublicFileEtags || !etagPublicDir) return;
           if (!updateDevPublicFileEtag(devPublicFileEtags, filePath)) {
             devPublicFileEtags = createDevPublicFileEtags(
-              devPublicDir,
+              etagPublicDir,
               undefined,
               undefined,
               devPublicFileEtags.viteUsesStatLookup,
@@ -4541,7 +4565,46 @@ export const loadServerActionClient = ${
           socket.on("error", () => {});
         });
 
+        const configuredPublicDir =
+          server.config.publicDir === "" ? false : (server.config.publicDir as string | false);
+        const devPublicDir =
+          configuredPublicDir === false
+            ? null
+            : path.resolve(toSlash(server.config.root), toSlash(configuredPublicDir));
+        devPublicFileRoutes = new Set(scanPublicFileRoutes(root, configuredPublicDir));
+        const publicRoutesForFile = (filePath: string): string[] | null => {
+          if (devPublicDir === null) return null;
+          const cleanPath = toSlash(stripViteModuleQuery(filePath));
+          const relativePath = path.relative(devPublicDir, cleanPath);
+          if (
+            relativePath === "" ||
+            relativePath.startsWith("../") ||
+            path.isAbsolute(relativePath)
+          ) {
+            return null;
+          }
+          return publicFilePathVariants(`/${relativePath}`);
+        };
+        const updatePublicFileRoute = (filePath: string, present: boolean): void => {
+          const routes = publicRoutesForFile(filePath);
+          if (routes === null || devPublicFileRoutes === null) return;
+          let changed = false;
+          for (const route of routes) {
+            const routeChanged = present
+              ? !devPublicFileRoutes.has(route)
+              : devPublicFileRoutes.has(route);
+            if (!routeChanged) continue;
+            changed = true;
+            if (present) devPublicFileRoutes.add(route);
+            else devPublicFileRoutes.delete(route);
+          }
+          if (!changed) return;
+          if (hasAppDir) invalidateRscEntryModule();
+          if (hasCloudflarePlugin && hasPagesDir && !hasAppDir) invalidatePagesServerEntry();
+        };
+
         server.watcher.on("add", (filePath: string) => {
+          updatePublicFileRoute(filePath, true);
           let routeChanged = false;
           const pagesAppChanged = isPagesAppFile(filePath);
           const pagesAssetGraphScriptChanged = isPotentialPagesAssetGraphScript(filePath);
@@ -4583,6 +4646,7 @@ export const loadServerActionClient = ${
           }
         });
         server.watcher.on("unlink", (filePath: string) => {
+          updatePublicFileRoute(filePath, false);
           let routeChanged = false;
           const pagesAppChanged = isPagesAppFile(filePath);
           const pagesAssetGraphScriptChanged = isPotentialPagesAssetGraphScript(filePath);
@@ -4614,6 +4678,35 @@ export const loadServerActionClient = ${
           }
         });
 
+        type DevPagesMiddleware = (
+          req: import("node:http").IncomingMessage,
+          res: import("node:http").ServerResponse,
+          next: (error?: unknown) => void,
+        ) => Promise<void>;
+        let handlePagesMiddleware: DevPagesMiddleware | null = null;
+        const isExistingDevPublicFile = (requestPathname: string): boolean =>
+          devPublicFileRoutes?.has(requestPathname) === true;
+        const isUnsupportedDevPublicRequest = (
+          req: import("node:http").IncomingMessage,
+          pathnameState: "pre-base" | "post-base" = "pre-base",
+        ): boolean => {
+          if (req.method === "GET" || req.method === "HEAD") return false;
+          let pathname: string;
+          try {
+            pathname = normalizePathnameForRouteMatchStrict(
+              new URL(req.url ?? "/", "http://vinext.invalid").pathname,
+            );
+          } catch {
+            return false;
+          }
+          const basePath = nextConfig?.basePath ?? "";
+          if (pathnameState === "pre-base" && basePath) {
+            if (!hasBasePath(pathname, basePath)) return false;
+            pathname = stripBasePath(pathname, basePath);
+          }
+          return isExistingDevPublicFile(pathname);
+        };
+
         // ── Dev request origin check ─────────────────────────────────────
         // Registered directly (not in the returned function) so it runs
         // BEFORE Vite's built-in middleware. This ensures all requests
@@ -4639,6 +4732,16 @@ export const loadServerActionClient = ${
           next();
         });
 
+        // Vite serves public files for every method. Intercept only mutations
+        // to known public files before Vite's internals, then run the canonical
+        // Pages pipeline so config/middleware ordering and headers are retained.
+        server.middlewares.use((req, res, next) => {
+          if (!hasPagesDir || !handlePagesMiddleware || !isUnsupportedDevPublicRequest(req)) {
+            return next();
+          }
+          void handlePagesMiddleware(req, res, next);
+        });
+
         installDevStackSourcemapMiddleware(server);
 
         // Return a function to register middleware AFTER Vite's built-in middleware
@@ -4653,6 +4756,34 @@ export const loadServerActionClient = ${
               (handle): handle is import("vite").Connect.NextHandleFunction =>
                 typeof handle === "function",
             );
+
+          // The patched Vite sirv middleware serves public files for every
+          // method. In App-only and Cloudflare dev projects, let mutations pass
+          // through to the framework request handler. App Router applies the
+          // canonical middleware -> beforeFiles -> filesystem ordering; the
+          // Cloudflare plugin delegates to the Worker/miniflare request path.
+          if ((hasAppDir && !hasPagesDir) || hasCloudflarePlugin) {
+            const publicMiddlewareEntry = server.middlewares.stack.find(
+              ({ handle }) =>
+                typeof handle === "function" && handle.name === "viteServePublicMiddleware",
+            );
+            const viteServePublic = publicMiddlewareEntry?.handle as
+              | import("vite").Connect.NextHandleFunction
+              | undefined;
+            if (publicMiddlewareEntry && viteServePublic) {
+              const vinextServePublicMiddleware: import("vite").Connect.NextHandleFunction = (
+                req,
+                res,
+                next,
+              ) => {
+                // Vite's base middleware runs before its public middleware,
+                // so req.url may already have had nextConfig.basePath removed.
+                if (isUnsupportedDevPublicRequest(req, "post-base")) return next();
+                return viteServePublic(req, res, next);
+              };
+              publicMiddlewareEntry.handle = vinextServePublicMiddleware;
+            }
+          }
 
           const serveRewrittenViteFilesystemRoute = async (
             req: import("node:http").IncomingMessage,
@@ -4868,7 +4999,7 @@ export const loadServerActionClient = ${
             });
           }
 
-          const handlePagesMiddleware = async (
+          handlePagesMiddleware = async (
             req: import("node:http").IncomingMessage,
             res: import("node:http").ServerResponse,
             next: (err?: unknown) => void,
@@ -5168,6 +5299,8 @@ export const loadServerActionClient = ${
                 }),
               );
               const isFilePathRequest = pathname.includes(".") && !pathname.endsWith(".html");
+              const isExistingPublicMutation =
+                req.method !== "GET" && req.method !== "HEAD" && isExistingDevPublicFile(pathname);
               let filePathMatchesPagesRoute = false;
               const requestHostname = getUrlHostname(requestOrigin);
               if (isFilePathRequest && !filePathMatchesRewrite) {
@@ -5192,7 +5325,12 @@ export const loadServerActionClient = ${
                   matchRoute(pageRouteUrl, pageRoutes) !== null ||
                   matchRoute(apiRouteUrl, apiRoutes) !== null;
               }
-              if (isFilePathRequest && !filePathMatchesRewrite && !filePathMatchesPagesRoute) {
+              if (
+                isFilePathRequest &&
+                !filePathMatchesRewrite &&
+                !filePathMatchesPagesRoute &&
+                !isExistingPublicMutation
+              ) {
                 return next();
               }
 
@@ -5398,14 +5536,19 @@ export const loadServerActionClient = ${
                   return proxyExternalRequest(reqWithBody, externalUrl);
                 },
                 serveFilesystemRoute: async (requestPathname, stagedHeaders, phase) => {
+                  const isRetrievalMethod = req.method === "GET" || req.method === "HEAD";
                   if (
-                    phase === "direct" ||
-                    (req.method !== "GET" && req.method !== "HEAD") ||
+                    (phase === "direct" && isRetrievalMethod) ||
                     requestPathname === "/" ||
                     requestPathname === "/api" ||
                     requestPathname.startsWith("/api/")
                   ) {
                     return false;
+                  }
+                  if (!isRetrievalMethod) {
+                    return isExistingDevPublicFile(requestPathname)
+                      ? methodNotAllowedResponse("GET, HEAD")
+                      : false;
                   }
                   return serveRewrittenViteFilesystemRoute(
                     req,
@@ -5586,7 +5729,7 @@ export const loadServerActionClient = ${
           };
 
           server.middlewares.use((req, res, next) => {
-            void handlePagesMiddleware(req, res, next);
+            void handlePagesMiddleware!(req, res, next);
           });
         };
       },

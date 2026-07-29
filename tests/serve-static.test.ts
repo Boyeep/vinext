@@ -107,6 +107,66 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     await fsp.rm(clientDir, { recursive: true, force: true });
   });
 
+  it("returns 405 with Allow for unsupported methods on cached assets", async () => {
+    await writeFile(clientDir, "_next/static/app-abc123.js", "console.log('asset')");
+    const cache = await StaticFileCache.create(clientDir);
+    const req = mockReq(undefined, undefined, "POST");
+    const { res, captured } = mockRes();
+
+    const served = await tryServeStatic(
+      req,
+      res,
+      clientDir,
+      "/_next/static/app-abc123.js",
+      true,
+      cache,
+    );
+    await captured.ended;
+
+    expect(served).toBe(true);
+    expect(captured.status).toBe(405);
+    expect(captured.headers.Allow).toBe("GET, HEAD");
+    expect(captured.body.toString()).toBe("Method Not Allowed");
+  });
+
+  it("returns 405 with Allow for unsupported methods on uncached assets", async () => {
+    await writeFile(clientDir, "robots.txt", "User-agent: *");
+    const req = mockReq(undefined, undefined, "DELETE");
+    const { res, captured } = mockRes();
+
+    const served = await tryServeStatic(req, res, clientDir, "/robots.txt", true, undefined, {
+      "X-From-Middleware": "preserved",
+      "Set-Cookie": ["a=1", "b=2"],
+      "Content-Encoding": "gzip",
+      "Content-Range": "bytes 0-17/18",
+      "Content-Type": "application/wrong",
+    });
+    await captured.ended;
+
+    expect(served).toBe(true);
+    expect(captured.status).toBe(405);
+    expect(captured.headers.Allow).toBe("GET, HEAD");
+    expect(captured.headers["X-From-Middleware"]).toBe("preserved");
+    expect(captured.headers["Set-Cookie"]).toEqual(["a=1", "b=2"]);
+    expect(captured.headers["Content-Encoding"]).toBeUndefined();
+    expect(captured.headers["Content-Range"]).toBeUndefined();
+    expect(captured.headers["Content-Type"]).toBe("text/plain; charset=utf-8");
+    expect(captured.body.toString()).toBe("Method Not Allowed");
+  });
+
+  it("does not turn missing assets into method errors", async () => {
+    const cache = await StaticFileCache.create(clientDir);
+    const req = mockReq(undefined, undefined, "POST");
+    const { res } = mockRes();
+
+    await expect(
+      tryServeStatic(req, res, clientDir, "/_next/static/missing.js", true, cache),
+    ).resolves.toBe(false);
+    await expect(tryServeStatic(req, res, clientDir, "/public-missing.txt", true)).resolves.toBe(
+      false,
+    );
+  });
+
   // ── Precompressed serving ──────────────────────────────────────
 
   it("serves precompressed brotli for hashed assets when client accepts br", async () => {
@@ -832,7 +892,9 @@ describe("tryServeStatic (with StaticFileCache)", () => {
 
   it("serves cached ranges with conditional precedence and lossless large integers", async () => {
     const relativePath = "_next/static/range-aaa111.js";
-    const content = "0123456789";
+    // Keep the compressed sidecar wire-beneficial so this still exercises
+    // range negotiation against an entry that varies by Accept-Encoding.
+    const content = "0123456789".repeat(100);
     await writeFile(clientDir, relativePath, content);
     await writeFile(clientDir, `${relativePath}.br`, zlib.brotliCompressSync(content));
     const cache = await StaticFileCache.create(clientDir);
@@ -864,11 +926,11 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     await tryServeStatic(rangeReq, rangeRes, clientDir, `/${relativePath}`, true, cache);
     await range.ended;
     expect(range.status).toBe(206);
-    expect(range.headers["Content-Range"]).toBe("bytes 2-9/10");
-    expect(range.headers["Content-Length"]).toBe("8");
+    expect(range.headers["Content-Range"]).toBe("bytes 2-999/1000");
+    expect(range.headers["Content-Length"]).toBe("998");
     expect(range.headers["Content-Encoding"]).toBeUndefined();
     expect(range.headers.Vary).toBe("Accept-Encoding");
-    expect(range.body.toString()).toBe("23456789");
+    expect(range.body.toString()).toBe(content.slice(2));
 
     const unsatisfiableReq = mockReq(undefined, { range: "bytes=9007199254740992-" });
     const { res: unsatisfiableRes, captured: unsatisfiable } = mockRes();
@@ -883,7 +945,7 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     await unsatisfiable.ended;
     expect(unsatisfiable.status).toBe(416);
     expect(unsatisfiable.headers["Content-Type"]).toBe("application/javascript; charset=utf-8");
-    expect(unsatisfiable.headers["Content-Range"]).toBe("bytes */10");
+    expect(unsatisfiable.headers["Content-Range"]).toBe("bytes */1000");
     expect(unsatisfiable.body).toHaveLength(0);
 
     const headReq = mockReq(undefined, { range: "bytes=2-5" }, "HEAD");
@@ -891,7 +953,7 @@ describe("tryServeStatic (with StaticFileCache)", () => {
     await tryServeStatic(headReq, headRes, clientDir, `/${relativePath}`, true, cache);
     await head.ended;
     expect(head.status).toBe(206);
-    expect(head.headers["Content-Range"]).toBe("bytes 2-5/10");
+    expect(head.headers["Content-Range"]).toBe("bytes 2-5/1000");
     expect(head.headers["Content-Length"]).toBe("4");
     expect(head.body).toHaveLength(0);
   });

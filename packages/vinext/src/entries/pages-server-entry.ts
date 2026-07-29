@@ -45,6 +45,7 @@ export async function generateServerEntry(
   fileMatcher: ReturnType<typeof createValidFileMatcher>,
   middlewarePath: string | null,
   instrumentationPath: string | null,
+  publicFiles: string[] = [],
 ): Promise<string> {
   const pageRoutes = await pagesRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher);
   const apiRoutes = await apiRouter(pagesDir, nextConfig?.pageExtensions, fileMatcher);
@@ -309,6 +310,7 @@ ${errorImportCode}
 export const pageRoutes = [
 ${pageRouteEntries.join(",\n")}
 ];
+export const publicFiles = new Set(${JSON.stringify(publicFiles)});
 const _pageRouteTrie = _buildRouteTrie(pageRoutes);
 const _errorPageRoute = {
   pattern: "/_error",

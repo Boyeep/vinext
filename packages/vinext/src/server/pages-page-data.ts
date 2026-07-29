@@ -12,7 +12,12 @@ import type {
 import { applyCdnResponseHeaders } from "./cache-control.js";
 import { buildMissIsrCacheControl, decideIsr } from "./isr-decision.js";
 import { buildCacheStateHeaders } from "./cache-headers.js";
-import { buildPagesCacheValue, type ISRCacheEntry } from "./isr-cache.js";
+import {
+  buildPagesCacheValue,
+  isrCacheControl,
+  type ISRCacheEntry,
+  type IsrWritePolicy,
+} from "./isr-cache.js";
 import type { PagesPreviewData } from "./pages-preview.js";
 import {
   buildPagesNextDataScript,
@@ -261,9 +266,7 @@ export type ResolvePagesPageDataOptions = {
   isrSet: (
     key: string,
     data: CachedPagesValue | CachedRedirectValue | null,
-    revalidateSeconds: number | false,
-    tags?: string[],
-    expireSeconds?: number,
+    policy: IsrWritePolicy,
   ) => Promise<void>;
   expireSeconds?: number;
   /**
@@ -1301,15 +1304,15 @@ export async function resolvePagesPageData(
                   kind: "REDIRECT",
                   props: buildPagesRedirectProps(redirect, freshRenderProps),
                 },
-                revalidateSeconds,
-                undefined,
-                expireSeconds,
+                { cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds }) },
               );
               return;
             }
 
             if (freshResult.notFound) {
-              await options.isrSet(cacheKey, null, revalidateSeconds, undefined, expireSeconds);
+              await options.isrSet(cacheKey, null, {
+                cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds }),
+              });
               return;
             }
 
@@ -1339,9 +1342,7 @@ export async function resolvePagesPageData(
               await options.isrSet(
                 cacheKey,
                 buildPagesCacheValue(freshHtml, freshRenderProps, options.statusCode),
-                revalidateSeconds,
-                undefined,
-                expireSeconds,
+                { cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds }) },
               );
               return;
             }
@@ -1359,9 +1360,7 @@ export async function resolvePagesPageData(
                 headers: undefined,
                 status: undefined,
               },
-              revalidateSeconds,
-              undefined,
-              expireSeconds,
+              { cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds }) },
             );
           });
         },
@@ -1585,9 +1584,7 @@ export async function resolvePagesPageData(
             kind: "REDIRECT",
             props: buildPagesRedirectProps(redirect, renderProps),
           },
-          revalidateSeconds,
-          undefined,
-          expireSeconds,
+          { cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds }) },
         );
         applyPagesTerminalMissHeaders(response, revalidateSeconds, pathname, expireSeconds);
       }
@@ -1601,7 +1598,9 @@ export async function resolvePagesPageData(
       const revalidateSeconds = resolvePagesRevalidateSeconds(result, options.routeUrl);
       const expireSeconds = resolvePagesExpireSeconds(result, options.expireSeconds);
       if (previewData === false) {
-        await options.isrSet(cacheKey, null, revalidateSeconds, undefined, expireSeconds);
+        await options.isrSet(cacheKey, null, {
+          cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds }),
+        });
       }
       const notFoundResult = buildPagesNotFoundResult(
         options,
@@ -1661,9 +1660,7 @@ export async function resolvePagesPageData(
           headers: undefined,
           status: undefined,
         },
-        revalidateSeconds,
-        undefined,
-        isrExpireSeconds,
+        { cacheControl: isrCacheControl(revalidateSeconds, { expireSeconds: isrExpireSeconds }) },
       );
     }
   }

@@ -6,7 +6,6 @@ import {
   _consumeRequestScopedCacheLife,
   _peekRequestScopedCacheLife,
 } from "vinext/shims/cache-request-state";
-import type { CachedAppPageValue } from "vinext/shims/cache-handler";
 import type { RootParams } from "vinext/shims/root-params";
 import type { PprFallbackShellState } from "vinext/shims/ppr-fallback-shell";
 import {
@@ -89,7 +88,7 @@ import type { AppPageSsrHandler } from "./app-page-stream.js";
 import { VINEXT_PRERENDER_SPECULATIVE_HEADER } from "./headers.js";
 import type { ClientReuseManifestParseResult } from "./client-reuse-manifest.js";
 import { buildAppPageTags } from "./implicit-tags.js";
-import type { ISRCacheEntry } from "./isr-cache.js";
+import type { AppPageCacheSetter, ISRCacheEntry } from "./isr-cache.js";
 import {
   createAppLayoutParamAccessTracker,
   isAppLayoutObservationUnsafeForStaticReuse,
@@ -105,13 +104,6 @@ export type AppPageBoundaryOnError = (
   errorContext: unknown,
 ) => unknown;
 type AppPageDebugLogger = (event: string, detail: string) => void;
-type AppPageCacheSetter = (
-  key: string,
-  data: CachedAppPageValue,
-  revalidateSeconds: number,
-  tags: string[],
-  expireSeconds?: number,
-) => Promise<void>;
 type AppPageCacheGetter = (key: string) => Promise<ISRCacheEntry | null>;
 type AppPageBackgroundRegenerationErrorContext = {
   routerKind: "App Router";

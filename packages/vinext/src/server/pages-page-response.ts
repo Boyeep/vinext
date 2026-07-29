@@ -13,6 +13,7 @@ import {
   ISR_NEVER_CACHE_CONTROL,
   ISR_NO_STORE_CACHE_CONTROL,
 } from "./isr-decision.js";
+import { isrCacheControl, type IsrWritePolicy } from "./isr-cache.js";
 import { encodeCacheTag } from "../utils/encode-cache-tag.js";
 import { setCacheStateHeaders } from "./cache-headers.js";
 import { createNonceAttribute, escapeHtmlAttr } from "./html.js";
@@ -161,13 +162,7 @@ type RenderPagesPageResponseOptions = {
   /** Synchronous `res.revalidate()` render; cache persistence must finish before returning. */
   isOnDemandRevalidate?: boolean;
   isStaticPropsRoute?: boolean;
-  isrSet: (
-    key: string,
-    data: CachedPagesValue,
-    revalidateSeconds: number | false,
-    tags?: string[],
-    expireSeconds?: number,
-  ) => Promise<void>;
+  isrSet: (key: string, data: CachedPagesValue, policy: IsrWritePolicy) => Promise<void>;
   i18n: PagesI18nRenderContext;
   /**
    * True when rendering a `getStaticPaths` fallback shell for a path that
@@ -448,9 +443,11 @@ async function writePagesIsrCache(options: {
       headers: undefined,
       status: options.status,
     },
-    options.revalidateSeconds,
-    undefined,
-    options.expireSeconds,
+    {
+      cacheControl: isrCacheControl(options.revalidateSeconds, {
+        expireSeconds: options.expireSeconds,
+      }),
+    },
   );
 }
 

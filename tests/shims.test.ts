@@ -6844,6 +6844,89 @@ describe('"use cache" runtime', () => {
     expect(callCount).toBe(1);
   });
 
+  it("a use cache hit re-registers its client stale time on the request scope", async () => {
+    // The enclosing render's minimum is what gets persisted onto the page cache
+    // entry. If a warm `use cache` hit contributed revalidate/expire but dropped
+    // `stale`, the page entry would advertise a wider client-reuse window than
+    // the identical cold render did — the same output under two different
+    // freshness claims depending only on data-cache temperature.
+    const { registerCachedFunction } =
+      await import("../packages/vinext/src/shims/cache-runtime.js");
+    const {
+      setCacheHandler,
+      MemoryCacheHandler,
+      cacheLife,
+      _peekRequestScopedCacheLife,
+      _runWithCacheState,
+    } = await import("../packages/vinext/src/shims/cache.js");
+    setCacheHandler(new MemoryCacheHandler());
+
+    let callCount = 0;
+    const cached = registerCachedFunction(async () => {
+      // `seconds` is { stale: 30, revalidate: 1, expire: 60 }.
+      cacheLife("seconds");
+      callCount++;
+      return { data: "value" };
+    }, "test:stale-replay");
+
+    const coldStale = await _runWithCacheState(async () => {
+      await cached();
+      return _peekRequestScopedCacheLife()?.stale;
+    });
+    expect(callCount).toBe(1);
+    expect(coldStale).toBe(30);
+
+    const warmStale = await _runWithCacheState(async () => {
+      await cached();
+      return _peekRequestScopedCacheLife()?.stale;
+    });
+    expect(callCount).toBe(1);
+    expect(warmStale).toBe(30);
+  });
+
+  it("a nested use cache hit constrains the enclosing cache entry's lifetime", async () => {
+    // Mirrors the MISS path's `parentCtx.lifeConfigs.push`: an inner HIT during
+    // an outer MISS must still constrain the outer entry, or the child's stale
+    // claim disappears once the outer itself goes warm.
+    const { registerCachedFunction } =
+      await import("../packages/vinext/src/shims/cache-runtime.js");
+    const {
+      setCacheHandler,
+      MemoryCacheHandler,
+      cacheLife,
+      _peekRequestScopedCacheLife,
+      _runWithCacheState,
+    } = await import("../packages/vinext/src/shims/cache.js");
+    setCacheHandler(new MemoryCacheHandler());
+
+    let innerCalls = 0;
+    let outerCalls = 0;
+    const inner = registerCachedFunction(async () => {
+      cacheLife({ stale: 30, revalidate: 300, expire: 600 });
+      innerCalls++;
+      return "inner";
+    }, "test:nested-inner");
+    const outer = registerCachedFunction(async () => {
+      outerCalls++;
+      return await inner();
+    }, "test:nested-outer");
+
+    // Warm the inner entry alone, then run the outer cold: the inner HITs
+    // inside the outer's execution.
+    await _runWithCacheState(() => inner());
+    await _runWithCacheState(() => outer());
+    expect(innerCalls).toBe(1);
+    expect(outerCalls).toBe(1);
+
+    // Outer warm HIT — its stored entry must carry the inner's stale claim.
+    const warmStale = await _runWithCacheState(async () => {
+      await outer();
+      return _peekRequestScopedCacheLife()?.stale;
+    });
+    expect(outerCalls).toBe(1);
+    expect(warmStale).toBe(30);
+  });
+
   it("registerCachedFunction collects cacheTag", async () => {
     const { registerCachedFunction } =
       await import("../packages/vinext/src/shims/cache-runtime.js");
@@ -7560,7 +7643,9 @@ describe('"use cache" runtime', () => {
         await import("../packages/vinext/src/shims/cache.js");
       setCacheHandler(new MemoryCacheHandler());
 
+      let innerCalls = 0;
       const innerFn = async () => {
+        innerCalls++;
         cacheLife({ expire: 60 }); // 1 minute, under 5 minute threshold
         return "inner";
       };
@@ -7572,19 +7657,26 @@ describe('"use cache" runtime', () => {
       };
       const outerCached = registerCachedFunction(outerFn, "test:nested-short-outer");
 
-      let thrown: Error | undefined;
-      try {
-        await outerCached();
-      } catch (e) {
-        thrown = e as Error;
-      }
+      // The first outer call executes and stores the inner value before the
+      // outer validation throws. The second outer call therefore reads a warm
+      // inner HIT; it must surface the same nested-dynamic error rather than
+      // making correctness depend on cache temperature.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        let thrown: Error | undefined;
+        try {
+          await outerCached();
+        } catch (e) {
+          thrown = e as Error;
+        }
 
-      expect(thrown).toBeDefined();
-      expect(thrown!.message).toContain("expire");
-      expect(thrown!.message).toContain('"use cache"');
-      expect(thrown!.message).toContain("not allowed");
-      expect(thrown!.cause).toBeDefined();
-      expect((thrown!.cause as Error).message).toContain("dynamic cache life");
+        expect(thrown).toBeDefined();
+        expect(thrown!.message).toContain("expire");
+        expect(thrown!.message).toContain('"use cache"');
+        expect(thrown!.message).toContain("not allowed");
+        expect(thrown!.cause).toBeDefined();
+        expect((thrown!.cause as Error).message).toContain("dynamic cache life");
+      }
+      expect(innerCalls).toBe(1);
     });
   });
 
