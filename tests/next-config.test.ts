@@ -1417,6 +1417,19 @@ describe("parseBodySizeLimit", () => {
     expect(parseBodySizeLimit("+1048576")).toBe(1048576);
   });
 
+  // Next.js delegates to bytes.parse(), which falls back to parseInt(value, 10)
+  // whenever the complete filesize grammar does not match. These surprising
+  // results are compatibility behavior, not additional validation rules.
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/compiled/bytes/index.js
+  it("matches bytes.parse fallback semantics for non-filesize strings", () => {
+    expect(parseBodySizeLimit("1mb ")).toBe(1);
+    expect(parseBodySizeLimit(" 1mb")).toBe(1);
+    expect(parseBodySizeLimit("1\tmb")).toBe(1);
+    expect(parseBodySizeLimit("2wat")).toBe(2);
+    expect(parseBodySizeLimit("1e3")).toBe(1);
+    expect(parseBodySizeLimit("1.5")).toBe(1);
+  });
+
   it("returns default 1MB for undefined", () => {
     expect(parseBodySizeLimit(undefined)).toBe(1 * 1024 * 1024);
   });

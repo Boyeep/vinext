@@ -21,10 +21,20 @@ import { loadTsconfigResolutionForRoot } from "./tsconfig-paths.js";
 import { loadCommonJsModule, shouldRetryAsCommonJs } from "../utils/commonjs-loader.js";
 export const VINEXT_NEXT_CONFIG_PLUGIN_PROPERTY = "__vinextNextConfig";
 
+const BODY_SIZE_UNITS = {
+  b: 1,
+  kb: 1 << 10,
+  mb: 1 << 20,
+  gb: 1 << 30,
+  tb: 1024 ** 4,
+  pb: 1024 ** 5,
+} as const;
+const BODY_SIZE_PATTERN = /^([+-]?\d+(?:\.\d+)?) *(kb|mb|gb|tb|pb)$/i;
+
 /**
  * Parse a body size limit value (string or number) into bytes.
- * Accepts Next.js-style strings like "1mb", "500kb", "10mb", bare number strings like "1048576" (bytes),
- * and numeric values. Supports b, kb, mb, gb, tb, pb units.
+ * Mirrors Next.js's vendored bytes.parse() behavior for strings and passes
+ * numeric values through directly.
  * Returns the default 1MB if the value is not provided.
  * Throws Next.js's canonical config error if the value is invalid or less than 1 byte.
  */
@@ -35,34 +45,10 @@ export function parseBodySizeLimit(value: unknown): number {
     return value;
   }
   if (typeof value !== "string") throwInvalidServerActionsBodySizeLimit();
-  const trimmed = value.trim();
-  const match = trimmed.match(/^(\+?\d+(?:\.\d+)?)\s*(b|kb|mb|gb|tb|pb)?$/i);
-  if (!match) throwInvalidServerActionsBodySizeLimit();
-  const num = parseFloat(match[1]);
-  const unit = (match[2] ?? "b").toLowerCase();
-  let bytes: number;
-  switch (unit) {
-    case "b":
-      bytes = Math.floor(num);
-      break;
-    case "kb":
-      bytes = Math.floor(num * 1024);
-      break;
-    case "mb":
-      bytes = Math.floor(num * 1024 * 1024);
-      break;
-    case "gb":
-      bytes = Math.floor(num * 1024 * 1024 * 1024);
-      break;
-    case "tb":
-      bytes = Math.floor(num * 1024 * 1024 * 1024 * 1024);
-      break;
-    case "pb":
-      bytes = Math.floor(num * 1024 * 1024 * 1024 * 1024 * 1024);
-      break;
-    default:
-      throwInvalidServerActionsBodySizeLimit();
-  }
+  const match = BODY_SIZE_PATTERN.exec(value);
+  const amount = match ? Number.parseFloat(match[1]) : Number.parseInt(value, 10);
+  const unit = (match ? match[2].toLowerCase() : "b") as keyof typeof BODY_SIZE_UNITS;
+  const bytes = Math.floor(BODY_SIZE_UNITS[unit] * amount);
   if (Number.isNaN(bytes) || bytes < 1) throwInvalidServerActionsBodySizeLimit();
   return bytes;
 }
