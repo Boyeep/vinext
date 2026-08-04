@@ -11186,6 +11186,25 @@ describe("NextRequest API", () => {
     expect(url.href).toBe("http://localhost:3000/docs/_next/data/request-build/en/hello.json");
   });
 
+  it("nextUrl preserves the real localized-root Pages data endpoint", async () => {
+    // Next's client and middleware matcher tests use /en.json for a localized
+    // root data request. Its current formatter emits /enindex.json after
+    // mutation, so vinext deliberately preserves the real request endpoint.
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-matcher/index.test.ts
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/shared/lib/router/utils/format-next-pathname-info.ts
+    const { NextURL } = await import("../packages/vinext/src/shims/server.js");
+    const url = new NextURL("http://localhost:3000/_next/data/request-build/en.json", undefined, {
+      nextConfig: {
+        i18n: { defaultLocale: "en", locales: ["en", "fr"] },
+      },
+    });
+
+    expect(url.buildId).toBe("request-build");
+    expect(url.locale).toBe("en");
+    expect(url.pathname).toBe("/");
+    expect(url.href).toBe("http://localhost:3000/_next/data/request-build/en.json");
+  });
+
   it("nextUrl clones keep their independent Pages data URL identity", async () => {
     const { NextURL } = await import("../packages/vinext/src/shims/server.js");
     const url = new NextURL("http://localhost:3000/_next/data/request-build/about.json");

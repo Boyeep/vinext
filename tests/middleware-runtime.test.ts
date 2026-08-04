@@ -208,6 +208,31 @@ describe("middleware redirect protocol", () => {
   });
 
   // Ported from Next.js:
+  // packages/next/src/server/web/adapter.ts
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/web/adapter.ts
+  it("exposes the normalized page URL without a build ID for Pages data requests", async () => {
+    let capturedRequest: NextRequest | undefined;
+
+    await executeMiddleware({
+      isDataRequest: true,
+      isProxy: false,
+      module: {
+        default: (request: NextRequest) => {
+          capturedRequest = request;
+        },
+      },
+      // Pages request adapters normalize the data endpoint before entering the
+      // middleware runtime unless skipProxyUrlNormalize is enabled.
+      request: new Request("http://localhost:3000/about?from=data"),
+    });
+
+    expect(capturedRequest?.nextUrl.buildId).toBeUndefined();
+    expect(capturedRequest?.nextUrl.pathname).toBe("/about");
+    expect(capturedRequest?.nextUrl.href).toBe("http://localhost:3000/about?from=data");
+    expect(capturedRequest?.url).toBe("http://localhost:3000/about?from=data");
+  });
+
+  // Ported from Next.js:
   // test/e2e/skip-trailing-slash-redirect/index.test.ts
   // https://github.com/vercel/next.js/blob/canary/test/e2e/skip-trailing-slash-redirect/index.test.ts
   it("preserves the original Pages data URL when proxy URL normalization is disabled", async () => {
