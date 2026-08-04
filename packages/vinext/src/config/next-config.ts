@@ -25,23 +25,19 @@ export const VINEXT_NEXT_CONFIG_PLUGIN_PROPERTY = "__vinextNextConfig";
  * Parse a body size limit value (string or number) into bytes.
  * Accepts Next.js-style strings like "1mb", "500kb", "10mb", bare number strings like "1048576" (bytes),
  * and numeric values. Supports b, kb, mb, gb, tb, pb units.
- * Returns the default 1MB if the value is not provided or invalid.
- * Throws if the parsed value is less than 1.
+ * Returns the default 1MB if the value is not provided.
+ * Throws Next.js's canonical config error if the value is invalid or less than 1 byte.
  */
-export function parseBodySizeLimit(value: string | number | undefined | null): number {
-  if (value === undefined || value === null) return 1 * 1024 * 1024;
+export function parseBodySizeLimit(value: unknown): number {
+  if (value === undefined) return 1 * 1024 * 1024;
   if (typeof value === "number") {
-    if (value < 1) throw new Error(`Body size limit must be a positive number, got ${value}`);
+    if (Number.isNaN(value) || value < 1) throwInvalidServerActionsBodySizeLimit();
     return value;
   }
+  if (typeof value !== "string") throwInvalidServerActionsBodySizeLimit();
   const trimmed = value.trim();
   const match = trimmed.match(/^(\d+(?:\.\d+)?)\s*(b|kb|mb|gb|tb|pb)?$/i);
-  if (!match) {
-    console.warn(
-      `[vinext] Invalid bodySizeLimit value: "${value}". Expected a number or a string like "1mb", "500kb". Falling back to 1MB.`,
-    );
-    return 1 * 1024 * 1024;
-  }
+  if (!match) throwInvalidServerActionsBodySizeLimit();
   const num = parseFloat(match[1]);
   const unit = (match[2] ?? "b").toLowerCase();
   let bytes: number;
@@ -65,10 +61,17 @@ export function parseBodySizeLimit(value: string | number | undefined | null): n
       bytes = Math.floor(num * 1024 * 1024 * 1024 * 1024 * 1024);
       break;
     default:
-      return 1 * 1024 * 1024;
+      throwInvalidServerActionsBodySizeLimit();
   }
-  if (bytes < 1) throw new Error(`Body size limit must be a positive number, got ${bytes}`);
+  if (Number.isNaN(bytes) || bytes < 1) throwInvalidServerActionsBodySizeLimit();
   return bytes;
+}
+
+function throwInvalidServerActionsBodySizeLimit(): never {
+  throw new Error(
+    "Server Actions Size Limit must be a valid number or filesize format larger than 1MB: " +
+      "https://nextjs.org/docs/app/api-reference/next-config-js/serverActions#bodysizelimit",
+  );
 }
 
 export type HasCondition = {
@@ -1268,10 +1271,6 @@ function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function readOptionalBodySizeLimit(value: unknown): string | number | undefined {
-  return typeof value === "string" || typeof value === "number" ? value : undefined;
-}
-
 function readStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
@@ -1706,9 +1705,14 @@ export async function resolveNextConfig(
   const experimental = readOptionalRecord(config.experimental);
   const serverActionsConfig = readOptionalRecord(experimental?.serverActions);
   const serverActionsAllowedOrigins = readStringArray(serverActionsConfig?.allowedOrigins);
-  const serverActionsBodySizeLimitConfig = readOptionalBodySizeLimit(
-    serverActionsConfig?.bodySizeLimit,
-  );
+  const serverActionsBodySizeLimitConfig = serverActionsConfig?.bodySizeLimit;
+  if (
+    serverActionsBodySizeLimitConfig !== undefined &&
+    typeof serverActionsBodySizeLimitConfig !== "string" &&
+    typeof serverActionsBodySizeLimitConfig !== "number"
+  ) {
+    throwInvalidServerActionsBodySizeLimit();
+  }
   const serverActionsBodySizeLimit = parseBodySizeLimit(serverActionsBodySizeLimitConfig);
   // Preserve the verbatim config value (e.g. "2mb") for the "Body exceeded
   // {limit} limit" error message. Next.js surfaces the original string rather
