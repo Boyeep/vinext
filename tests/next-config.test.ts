@@ -1409,6 +1409,14 @@ describe("parseBodySizeLimit", () => {
     expect(parseBodySizeLimit("1.5mb")).toBe(Math.floor(1.5 * 1024 * 1024));
   });
 
+  // Next.js delegates to bytes.parse(), whose filesize grammar accepts an
+  // explicit positive sign.
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/compiled/bytes/index.js
+  it("accepts explicitly positive filesize strings", () => {
+    expect(parseBodySizeLimit("+2mb")).toBe(2 * 1024 * 1024);
+    expect(parseBodySizeLimit("+1048576")).toBe(1048576);
+  });
+
   it("returns default 1MB for undefined", () => {
     expect(parseBodySizeLimit(undefined)).toBe(1 * 1024 * 1024);
   });

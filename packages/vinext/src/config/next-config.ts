@@ -36,7 +36,7 @@ export function parseBodySizeLimit(value: unknown): number {
   }
   if (typeof value !== "string") throwInvalidServerActionsBodySizeLimit();
   const trimmed = value.trim();
-  const match = trimmed.match(/^(\d+(?:\.\d+)?)\s*(b|kb|mb|gb|tb|pb)?$/i);
+  const match = trimmed.match(/^(\+?\d+(?:\.\d+)?)\s*(b|kb|mb|gb|tb|pb)?$/i);
   if (!match) throwInvalidServerActionsBodySizeLimit();
   const num = parseFloat(match[1]);
   const unit = (match[2] ?? "b").toLowerCase();
