@@ -207,6 +207,31 @@ describe("middleware redirect protocol", () => {
     expect((capturedRequest as NextRequest & { __isData?: boolean }).__isData).toBeUndefined();
   });
 
+  // Ported from Next.js:
+  // test/e2e/skip-trailing-slash-redirect/index.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/skip-trailing-slash-redirect/index.test.ts
+  it("preserves the original Pages data URL when proxy URL normalization is disabled", async () => {
+    let capturedRequest: NextRequest | undefined;
+
+    await executeMiddleware({
+      isDataRequest: true,
+      isProxy: false,
+      module: {
+        default: (request: NextRequest) => {
+          capturedRequest = request;
+        },
+      },
+      request: new Request("http://localhost:3000/_next/data/request-build/about.json?from=data"),
+      skipProxyUrlNormalize: true,
+    });
+
+    expect(capturedRequest?.nextUrl.buildId).toBe("request-build");
+    expect(capturedRequest?.nextUrl.pathname).toBe("/_next/data/request-build/about.json");
+    expect(capturedRequest?.url).toBe(
+      "http://localhost:3000/_next/data/request-build/about.json?from=data",
+    );
+  });
+
   it("relativizes the Location header for same-host redirects", async () => {
     const module = {
       default: (req: Request) => {

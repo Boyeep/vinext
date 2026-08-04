@@ -83,6 +83,8 @@ type ExecuteMiddlewareOptions = {
    */
   requestBodyAlreadyIsolated?: boolean;
   request: Request;
+  /** Preserve the raw request URL exposed to middleware/proxy. */
+  skipProxyUrlNormalize?: boolean;
   /**
    * The user's `trailingSlash` config. Plumbed into the NextRequest's NextURL
    * so `request.nextUrl.toString()` formats with the configured slash policy,
@@ -242,6 +244,7 @@ function createNextRequest(
   trailingSlash?: boolean,
   hadBasePath?: boolean,
   requestBodyAlreadyIsolated = false,
+  skipProxyUrlNormalize = false,
 ): NextRequest {
   const url = new URL(request.url);
   // Middleware gets an isolated body branch; downstream routing keeps owning
@@ -266,11 +269,12 @@ function createNextRequest(
     mwRequest = new Request(mwUrl, mwRequest);
   }
 
-  const hasNextConfig = basePath || i18nConfig || trailingSlash;
+  const hasNextConfig = basePath || i18nConfig || trailingSlash || skipProxyUrlNormalize;
   const nextConfig = hasNextConfig
     ? {
         basePath: basePath ?? "",
         i18n: i18nConfig ?? undefined,
+        skipProxyUrlNormalize: skipProxyUrlNormalize || undefined,
         trailingSlash: trailingSlash ?? undefined,
       }
     : undefined;
@@ -360,6 +364,7 @@ export async function executeMiddleware(
     options.trailingSlash,
     hadBasePath,
     options.requestBodyAlreadyIsolated,
+    options.skipProxyUrlNormalize,
   );
   if (options.isDataRequest) {
     Object.defineProperty(nextRequest, "__isData", {
