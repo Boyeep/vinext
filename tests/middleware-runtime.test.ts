@@ -227,6 +227,9 @@ describe("middleware redirect protocol", () => {
 
     expect(capturedRequest?.nextUrl.buildId).toBe("request-build");
     expect(capturedRequest?.nextUrl.pathname).toBe("/_next/data/request-build/about.json");
+    expect(capturedRequest?.nextUrl.href).toBe(
+      "http://localhost:3000/_next/data/request-build/about.json?from=data",
+    );
     expect(capturedRequest?.url).toBe(
       "http://localhost:3000/_next/data/request-build/about.json?from=data",
     );

@@ -489,6 +489,15 @@ export class NextURL {
    * Mirrors Next.js's internal formatNextPathnameInfo().
    */
   private _formatPathname(): string {
+    const rawDataPrefix = this._buildId ? `/_next/data/${this._buildId}/` : undefined;
+    if (
+      rawDataPrefix &&
+      this._url.pathname.startsWith(rawDataPrefix) &&
+      this._url.pathname.endsWith(".json")
+    ) {
+      return this._basePath + this._url.pathname;
+    }
+
     let pagePrefix = "";
     const inner = this._url.pathname;
     const innerLower = inner.toLowerCase();

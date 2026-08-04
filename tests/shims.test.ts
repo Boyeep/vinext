@@ -11207,6 +11207,15 @@ describe("NextRequest API", () => {
 
     expect(req.nextUrl.buildId).toBe("request-build");
     expect(req.nextUrl.pathname).toBe("/_next/data/request-build/about.json");
+    expect(req.nextUrl.href).toBe(
+      "http://localhost:3000/_next/data/request-build/about.json?from=data",
+    );
+    expect(req.nextUrl.toString()).toBe(
+      "http://localhost:3000/_next/data/request-build/about.json?from=data",
+    );
+    expect(req.nextUrl.clone().href).toBe(
+      "http://localhost:3000/_next/data/request-build/about.json?from=data",
+    );
     expect(req.url).toBe("http://localhost:3000/_next/data/request-build/about.json?from=data");
   });
 });
